@@ -102,6 +102,8 @@ export default function mdx(partialMdxOptions: Partial<MdxOptions> = {}): AstroI
 					mdxOptions: resolvedMdxOptions,
 					srcDir: config.srcDir,
 					experimentalHeadingIdCompat: config.experimental.headingIdCompat,
+					markdownRS: config.markdownRS,
+					markdownRSOptions: config.markdownRSOptions,
 				});
 				// @ts-expect-error After we assign, we don't need to reference `mdxOptions` in this context anymore.
 				// Re-assign it so that the garbage can be collected later.

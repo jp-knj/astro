@@ -1619,6 +1619,75 @@ export interface ViteUserConfig extends OriginalViteUserConfig {
 
 	/**
 	 * @docs
+	 * @name markdownRS
+	 * @type {boolean}
+	 * @default `false`
+	 * @version 4.18.0
+	 * @description
+	 * Enable the experimental Rust-based MDX processor (mdx-rs) via WebAssembly.
+	 * This can significantly improve MDX compilation performance.
+	 * 
+	 * ```js
+	 * {
+	 *   markdownRS: true
+	 * }
+	 * ```
+	 */
+	markdownRS?: boolean;
+
+	/**
+	 * @docs
+	 * @name markdownRSOptions
+	 * @type {object}
+	 * @version 4.18.0
+	 * @description
+	 * Options for the experimental Rust-based MDX processor.
+	 * 
+	 * ```js
+	 * {
+	 *   markdownRS: true,
+	 *   markdownRSOptions: {
+	 *     fallbackToJs: true,
+	 *     cacheDir: './node_modules/.astro/mdx-rs',
+	 *     parallelism: 4
+	 *   }
+	 * }
+	 * ```
+	 */
+	markdownRSOptions?: {
+		/**
+		 * @docs
+		 * @name markdownRSOptions.fallbackToJs
+		 * @type {boolean}
+		 * @default `true`
+		 * @description
+		 * Whether to fallback to the JavaScript MDX processor if the Rust processor fails.
+		 */
+		fallbackToJs?: boolean;
+
+		/**
+		 * @docs
+		 * @name markdownRSOptions.cacheDir
+		 * @type {string}
+		 * @default `'./node_modules/.astro/mdx-rs'`
+		 * @description
+		 * Directory to cache the compiled WASM module.
+		 */
+		cacheDir?: string;
+
+		/**
+		 * @docs
+		 * @name markdownRSOptions.parallelism
+		 * @type {number}
+		 * @default `1`
+		 * @description
+		 * Number of parallel workers for processing (experimental).
+		 */
+		parallelism?: number;
+	};
+
+	/**
+	 * @docs
 	 * @kind heading
 	 * @name i18n
 	 * @type {object}

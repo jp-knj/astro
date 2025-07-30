@@ -82,6 +82,12 @@ export const ASTRO_CONFIG_DEFAULTS = {
 	},
 	integrations: [],
 	markdown: markdownConfigDefaults,
+	markdownRS: false,
+	markdownRSOptions: {
+		fallbackToJs: true,
+		cacheDir: './node_modules/.astro/mdx-rs',
+		parallelism: 1,
+	},
 	vite: {},
 	legacy: {
 		collections: false,
@@ -375,6 +381,15 @@ export const AstroConfigSchema = z.object({
 			smartypants: z.boolean().default(ASTRO_CONFIG_DEFAULTS.markdown.smartypants),
 		})
 		.default({}),
+	markdownRS: z.boolean().optional().default(ASTRO_CONFIG_DEFAULTS.markdownRS),
+	markdownRSOptions: z
+		.object({
+			fallbackToJs: z.boolean().optional().default(true),
+			cacheDir: z.string().optional().default('./node_modules/.astro/mdx-rs'),
+			parallelism: z.number().min(1).optional().default(1),
+		})
+		.optional()
+		.default(ASTRO_CONFIG_DEFAULTS.markdownRSOptions),
 	vite: z
 		.custom<ViteUserConfig>((data) => data instanceof Object && !Array.isArray(data))
 		.default(ASTRO_CONFIG_DEFAULTS.vite),

@@ -62,10 +62,31 @@ export function vitePluginMdx(opts: VitePluginMdxOptions): Plugin {
 
 			// Lazily initialize the MDX processor
 			if (!processor) {
-				processor = createMdxProcessor(opts.mdxOptions, {
-					sourcemap: sourcemapEnabled,
-					experimentalHeadingIdCompat: opts.experimentalHeadingIdCompat,
-				});
+				// Check if we should use the Rust processor
+				useRsProcessor = opts.markdownRS === true;
+				
+				if (useRsProcessor) {
+					try {
+						processor = await createMdxRsProcessor(opts);
+					} catch (error) {
+						// Fallback to JS processor if enabled
+						if (opts.markdownRSOptions?.fallbackToJs !== false) {
+							console.warn('Failed to initialize MDX-RS processor, falling back to JS:', error);
+							useRsProcessor = false;
+							processor = createMdxProcessor(opts.mdxOptions, {
+								sourcemap: sourcemapEnabled,
+								experimentalHeadingIdCompat: opts.experimentalHeadingIdCompat,
+							});
+						} else {
+							throw error;
+						}
+					}
+				} else {
+					processor = createMdxProcessor(opts.mdxOptions, {
+						sourcemap: sourcemapEnabled,
+						experimentalHeadingIdCompat: opts.experimentalHeadingIdCompat,
+					});
+				}
 			}
 
 			try {
