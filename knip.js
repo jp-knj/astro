@@ -73,5 +73,11 @@ export default {
 		'packages/upgrade': {
 			entry: ['src/index.ts', testEntry],
 		},
+		'packages/mdx-rs': {
+			entry: [testEntry],
+			// Ignore until WASM module is built
+			ignore: ['node/src/index.ts'],
+			ignoreBinaries: ['wasm-pack'],
+		},
 	},
 };
