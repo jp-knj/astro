@@ -1,0 +1,17 @@
+{
+  "name": "astro-mdx-rs",
+  "version": "0.1.0",
+  "description": "Minimal Node.js wrapper for mdx-rs WASM",
+  "main": "index.js",
+  "type": "module",
+  "files": [
+    "index.js",
+    "vite-plugin.js"
+  ],
+  "dependencies": {
+    "gray-matter": "^4.0.3"
+  },
+  "peerDependencies": {
+    "vite": "^5.0.0 || ^6.0.0"
+  }
+}
