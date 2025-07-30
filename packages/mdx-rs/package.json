@@ -1,0 +1,42 @@
+{
+  "name": "@astrojs/mdx-rs",
+  "version": "0.1.0",
+  "description": "MDX-RS WASM bindings for Astro",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./node/dist/index.d.ts",
+      "import": "./node/dist/index.js"
+    }
+  },
+  "files": [
+    "node/dist",
+    "wasm/pkg"
+  ],
+  "scripts": {
+    "build:wasm": "cd wasm && wasm-pack build --target nodejs --out-dir pkg",
+    "build:node": "cd node && tsc",
+    "build": "npm run build:wasm && npm run build:node",
+    "dev": "npm run build:wasm && cd node && tsc --watch"
+  },
+  "keywords": [
+    "astro",
+    "mdx",
+    "wasm",
+    "rust"
+  ],
+  "author": "withastro",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/withastro/astro.git",
+    "directory": "packages/mdx-rs"
+  },
+  "devDependencies": {
+    "@types/node": "^18.17.8",
+    "typescript": "^5.2.2"
+  },
+  "engines": {
+    "node": ">=18.14.1"
+  }
+}

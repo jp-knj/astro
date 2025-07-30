@@ -4,18 +4,26 @@ import { VFile } from 'vfile';
 import type { Plugin } from 'vite';
 import type { MdxOptions } from './index.js';
 import { createMdxProcessor } from './plugins.js';
+import { createMdxRsProcessor } from './mdx-rs-processor.js';
 import { safeParseFrontmatter } from './utils.js';
 
 export interface VitePluginMdxOptions {
 	mdxOptions: MdxOptions;
 	srcDir: URL;
 	experimentalHeadingIdCompat: boolean;
+	markdownRS?: boolean;
+	markdownRSOptions?: {
+		fallbackToJs?: boolean;
+		cacheDir?: string;
+		parallelism?: number;
+	};
 }
 
 // NOTE: Do not destructure `opts` as we're assigning a reference that will be mutated later
 export function vitePluginMdx(opts: VitePluginMdxOptions): Plugin {
-	let processor: ReturnType<typeof createMdxProcessor> | undefined;
+	let processor: any;
 	let sourcemapEnabled: boolean;
+	let useRsProcessor = false;
 
 	return {
 		name: '@mdx-js/rollup',
