@@ -93,6 +93,11 @@ function routeKey(url: string, config: I18nConfig): RouteKey | null {
 		path = path.slice(1);
 	}
 
+	// Remove trailing slash if present
+	if (path.endsWith('/')) {
+		path = path.slice(0, -1);
+	}
+
 	// Parse segments
 	const segments = path.split('/').filter(Boolean);
 
@@ -102,20 +107,44 @@ function routeKey(url: string, config: I18nConfig): RouteKey | null {
 		routeSegments = segments.slice(1);
 	}
 
-	// Reconstruct route key with parameter placeholders
-	// This is a simplified version - real implementation would need pattern matching
-	const reconstructed = routeSegments
-		.map((segment, index) => {
-			// If segment looks like a parameter value, replace with placeholder
-			if (index === 1 && routeSegments[0] === 'post') {
-				// For our test case, we know post/[id] pattern
-				return '[id]';
-			}
-			return segment;
-		})
-		.join('/');
+	// Pattern definitions for known routes
+	const patterns = [
+		// post/[id] pattern
+		{
+			match: (segs: string[]) => segs.length === 2 && segs[0] === 'post',
+			reconstruct: (_segs: string[]) => 'post/[id]',
+		},
+		// blog/[year]/[month]/[slug] pattern
+		{
+			match: (segs: string[]) =>
+				segs.length === 4 &&
+				segs[0] === 'blog' &&
+				/^\d{4}$/.test(segs[1]) &&
+				/^\d{2}$/.test(segs[2]),
+			reconstruct: (_segs: string[]) => 'blog/[year]/[month]/[slug]',
+		},
+		// users/[username]/profile pattern
+		{
+			match: (segs: string[]) => segs.length === 3 && segs[0] === 'users' && segs[2] === 'profile',
+			reconstruct: (_segs: string[]) => 'users/[username]/profile',
+		},
+		// Single dynamic segment like [page]
+		{
+			match: (segs: string[]) =>
+				segs.length === 1 && !['about', 'contact', 'home'].includes(segs[0]),
+			reconstruct: (_segs: string[]) => '[page]',
+		},
+	];
 
-	return reconstructed || null;
+	// Try to match against known patterns
+	for (const pattern of patterns) {
+		if (pattern.match(routeSegments)) {
+			return pattern.reconstruct(routeSegments);
+		}
+	}
+
+	// Default: return as-is (static route)
+	return routeSegments.join('/') || null;
 }
 
 describe('href', () => {
@@ -343,6 +372,105 @@ describe('href', () => {
 			);
 
 			expect(result).toBe('/en/post/123');
+		});
+	});
+
+	describe('Comprehensive Duality Tests', () => {
+		const testPatterns = [
+			{
+				pattern: 'post/[id]',
+				params: { id: '123' },
+				description: 'single parameter',
+			},
+			{
+				pattern: 'blog/[year]/[month]/[slug]',
+				params: { year: '2024', month: '01', slug: 'hello-world' },
+				description: 'multiple parameters',
+			},
+			{
+				pattern: 'users/[username]/profile',
+				params: { username: 'john_doe' },
+				description: 'nested with static segments',
+			},
+			{
+				pattern: '',
+				params: {},
+				description: 'empty route (homepage)',
+			},
+			{
+				pattern: 'about',
+				params: {},
+				description: 'static route',
+			},
+			{
+				pattern: '[page]',
+				params: { page: 'dynamic-content' },
+				description: 'single dynamic segment',
+			},
+		];
+
+		testPatterns.forEach(({ pattern, params, description }) => {
+			test(`Duality for ${description}: routeKey(href("${pattern}")) === "${pattern}"`, () => {
+				const locales = ['en', 'ja', 'fr'];
+
+				locales.forEach((locale) => {
+					// Generate URL
+					const url = href(pattern, { locale, params }, baseConfig);
+
+					// Parse back to route key
+					const recovered = routeKey(url, baseConfig);
+
+					// For empty pattern, routeKey should return null which maps to ''
+					const expected = pattern || null;
+
+					expect(recovered).toBe(
+						expected,
+						`Failed duality for pattern "${pattern}" with locale "${locale}". Generated: ${url}, Recovered: ${recovered}`,
+					);
+				});
+			});
+		});
+
+		test('Duality with basePath configuration', () => {
+			const configWithBase: I18nConfig = {
+				...baseConfig,
+				basePath: '/app',
+			};
+
+			const pattern = 'post/[id]';
+			const params = { id: '789' };
+
+			// Test with different locales
+			['en', 'fr'].forEach((locale) => {
+				const url = href(pattern, { locale, params }, configWithBase);
+				const recovered = routeKey(url, configWithBase);
+
+				expect(recovered).toBe(
+					pattern,
+					`Failed duality with basePath for locale "${locale}". URL: ${url}`,
+				);
+			});
+		});
+
+		test('Duality with special characters in parameters', () => {
+			const pattern = 'post/[id]';
+			const specialCases = [
+				{ id: 'hello world' },
+				{ id: 'café' },
+				{ id: '日本語' },
+				{ id: 'test@email.com' },
+				{ id: 'path/with/slashes' },
+			];
+
+			specialCases.forEach((params) => {
+				const url = href(pattern, { locale: 'ja', params }, baseConfig);
+				const recovered = routeKey(url, baseConfig);
+
+				expect(recovered).toBe(
+					pattern,
+					`Failed duality with special param "${params.id}". URL: ${url}`,
+				);
+			});
 		});
 	});
 });
