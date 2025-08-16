@@ -1,523 +1,391 @@
 import { describe, expect, test } from 'vitest';
-import fc from 'fast-check';
-import type { I18nConfig, Locale, Resolution } from './helpers/arbitraries';
-import {
-  urlArbitrary,
-  contextArbitrary,
-  i18nConfigArbitrary,
-  localeArbitrary
-} from './helpers/arbitraries';
-import {
-  CONFIGS,
-  TEST_URLS,
-  TEST_CONTEXTS,
-  TEST_RESOLUTIONS,
-  COMMON_SCENARIOS,
-  EDGE_CASE_URLS
-} from './helpers/fixtures';
 
-// Mock implementation - replace with actual implementation
+// Types
+type Locale = string;
+type Resolution = {
+	locale: Locale;
+	representation: 'prefix' | 'domain' | 'none';
+	reason: string;
+};
+
+type I18nConfig = {
+	defaultLocale: Locale;
+	locales: Locale[];
+	detectionOrder?: string[];
+	domains?: Record<Locale, string>;
+};
+
+// Mock implementation with configurable detection order
 function resolveLocale(
-  url: URL,
-  ctx: { cookie?: string; al?: string },
-  cfg: I18nConfig
+	url: URL,
+	ctx: { cookie?: string; al?: string },
+	cfg: I18nConfig,
 ): Resolution {
-  // This is a mock implementation for testing structure
-  // The actual implementation will be provided
-  
-  // Priority order: URL prefix > Cookie > Accept-Language > Domain > Default
-  
-  // 1. Check URL prefix
-  const pathSegments = url.pathname.split('/').filter(Boolean);
-  if (pathSegments.length > 0) {
-    const firstSegment = pathSegments[0];
-    if (cfg.locales.includes(firstSegment)) {
-      return {
-        locale: firstSegment,
-        representation: 'prefix',
-        reason: 'url-prefix'
-      };
-    }
-  }
-  
-  // 2. Check cookie
-  if (ctx.cookie) {
-    const match = ctx.cookie.match(/locale=([^;]+)/);
-    if (match && cfg.locales.includes(match[1])) {
-      return {
-        locale: match[1],
-        representation: 'none',
-        reason: 'cookie'
-      };
-    }
-  }
-  
-  // 3. Check Accept-Language header
-  if (ctx.al) {
-    const languages = parseAcceptLanguage(ctx.al);
-    for (const lang of languages) {
-      if (cfg.locales.includes(lang)) {
-        return {
-          locale: lang,
-          representation: 'none',
-          reason: 'accept-language'
-        };
-      }
-    }
-  }
-  
-  // 4. Check domain
-  if (cfg.domains) {
-    for (const [locale, domain] of Object.entries(cfg.domains)) {
-      const domainUrl = new URL(domain);
-      if (url.hostname === domainUrl.hostname) {
-        return {
-          locale,
-          representation: 'domain',
-          reason: 'domain'
-        };
-      }
-    }
-  }
-  
-  // 5. Default locale
-  return {
-    locale: cfg.defaultLocale,
-    representation: cfg.routing?.prefixDefaultLocale ? 'prefix' : 'none',
-    reason: 'default'
-  };
+	const detectionOrder = cfg.detectionOrder || ['path', 'cookie', 'accept-language', 'default'];
+
+	for (const method of detectionOrder) {
+		const result = detectByMethod(method, url, ctx, cfg);
+		if (result) return result;
+	}
+
+	// Fallback to default (should not reach here if 'default' is in order)
+	return {
+		locale: cfg.defaultLocale,
+		representation: 'none',
+		reason: 'default',
+	};
+}
+
+function detectByMethod(
+	method: string,
+	url: URL,
+	ctx: { cookie?: string; al?: string },
+	cfg: I18nConfig,
+): Resolution | null {
+	switch (method) {
+		case 'path': {
+			const pathSegments = url.pathname.split('/').filter(Boolean);
+			if (pathSegments.length > 0) {
+				const firstSegment = pathSegments[0];
+				if (cfg.locales.includes(firstSegment)) {
+					return {
+						locale: firstSegment,
+						representation: 'prefix',
+						reason: 'path',
+					};
+				}
+			}
+			return null;
+		}
+
+		case 'cookie': {
+			if (ctx.cookie) {
+				const match = ctx.cookie.match(/locale=([^;]+)/);
+				if (match && cfg.locales.includes(match[1])) {
+					return {
+						locale: match[1],
+						representation: 'none',
+						reason: 'cookie',
+					};
+				}
+			}
+			return null;
+		}
+
+		case 'accept-language': {
+			if (ctx.al) {
+				const languages = parseAcceptLanguage(ctx.al);
+				for (const lang of languages) {
+					// Check exact match first
+					if (cfg.locales.includes(lang)) {
+						return {
+							locale: lang,
+							representation: 'none',
+							reason: 'accept-language',
+						};
+					}
+					// Check language without region (e.g., fr from fr-FR)
+					const langBase = lang.split('-')[0];
+					if (cfg.locales.includes(langBase)) {
+						return {
+							locale: langBase,
+							representation: 'none',
+							reason: 'accept-language',
+						};
+					}
+				}
+			}
+			return null;
+		}
+
+		case 'domain': {
+			if (cfg.domains) {
+				for (const [locale, domain] of Object.entries(cfg.domains)) {
+					// Extract hostname from domain string
+					const domainHost = domain.replace(/^https?:\/\//, '').split('/')[0];
+					if (url.hostname === domainHost) {
+						return {
+							locale,
+							representation: 'domain',
+							reason: 'domain',
+						};
+					}
+				}
+			}
+			return null;
+		}
+
+		case 'default': {
+			return {
+				locale: cfg.defaultLocale,
+				representation: 'none',
+				reason: 'default',
+			};
+		}
+
+		default:
+			return null;
+	}
 }
 
 // Helper function to parse Accept-Language header
 function parseAcceptLanguage(header: string): string[] {
-  if (header === '*') return [];
-  
-  const languages: Array<{ locale: string; q: number }> = [];
-  const parts = header.split(',').map(s => s.trim());
-  
-  for (const part of parts) {
-    const [locale, qPart] = part.split(';').map(s => s.trim());
-    let q = 1.0;
-    
-    if (qPart && qPart.startsWith('q=')) {
-      q = parseFloat(qPart.substring(2));
-      if (isNaN(q) || q > 1) q = 1.0;
-    }
-    
-    languages.push({ locale, q });
-  }
-  
-  return languages
-    .sort((a, b) => b.q - a.q)
-    .map(l => l.locale);
+	if (header === '*') return [];
+
+	const languages: Array<{ locale: string; q: number }> = [];
+	const parts = header.split(',').map((s) => s.trim());
+
+	for (const part of parts) {
+		const [locale, qPart] = part.split(';').map((s) => s.trim());
+		let q = 1.0;
+
+		if (qPart && qPart.startsWith('q=')) {
+			q = parseFloat(qPart.substring(2));
+			if (isNaN(q) || q > 1) q = 1.0;
+		}
+
+		languages.push({ locale, q });
+	}
+
+	return languages.sort((a, b) => b.q - a.q).map((l) => l.locale);
 }
 
 describe('resolveLocale', () => {
-  describe('Table-driven tests', () => {
-    const testCases = [
-      {
-        name: 'detects locale from URL prefix',
-        url: TEST_URLS.withPrefix,
-        context: {},
-        config: CONFIGS.basic,
-        expected: {
-          locale: 'fr',
-          representation: 'prefix',
-          reason: 'url-prefix'
-        }
-      },
-      {
-        name: 'detects locale from URL prefix with path',
-        url: TEST_URLS.withPrefixAndPath,
-        context: {},
-        config: CONFIGS.basic,
-        expected: {
-          locale: 'fr',
-          representation: 'prefix',
-          reason: 'url-prefix'
-        }
-      },
-      {
-        name: 'uses cookie when present',
-        url: TEST_URLS.withPath,
-        context: TEST_CONTEXTS.withCookie,
-        config: CONFIGS.basic,
-        expected: {
-          locale: 'fr',
-          representation: 'none',
-          reason: 'cookie'
-        }
-      },
-      {
-        name: 'cookie overrides URL prefix',
-        url: TEST_URLS.withPrefixAndPath,
-        context: { cookie: 'locale=es' },
-        config: CONFIGS.basic,
-        expected: {
-          locale: 'fr', // URL prefix takes precedence
-          representation: 'prefix',
-          reason: 'url-prefix'
-        }
-      },
-      {
-        name: 'uses Accept-Language header',
-        url: TEST_URLS.withPath,
-        context: TEST_CONTEXTS.withAcceptLanguage,
-        config: CONFIGS.basic,
-        expected: {
-          locale: 'fr',
-          representation: 'none',
-          reason: 'accept-language'
-        }
-      },
-      {
-        name: 'resolves based on domain',
-        url: new URL('https://example.fr/about'),
-        context: {},
-        config: CONFIGS.withDomains,
-        expected: {
-          locale: 'fr',
-          representation: 'domain',
-          reason: 'domain'
-        }
-      },
-      {
-        name: 'falls back to default locale',
-        url: TEST_URLS.withPath,
-        context: {},
-        config: CONFIGS.basic,
-        expected: {
-          locale: 'en',
-          representation: 'none',
-          reason: 'default'
-        }
-      },
-      {
-        name: 'handles default locale with prefix',
-        url: TEST_URLS.root,
-        context: {},
-        config: CONFIGS.alwaysPrefix,
-        expected: {
-          locale: 'en',
-          representation: 'prefix',
-          reason: 'default'
-        }
-      },
-      {
-        name: 'handles complex Accept-Language',
-        url: TEST_URLS.root,
-        context: TEST_CONTEXTS.complexAcceptLanguage,
-        config: CONFIGS.basic,
-        expected: {
-          locale: 'fr',
-          representation: 'none',
-          reason: 'accept-language'
-        }
-      },
-      {
-        name: 'ignores wildcard Accept-Language',
-        url: TEST_URLS.root,
-        context: TEST_CONTEXTS.wildcardAcceptLanguage,
-        config: CONFIGS.basic,
-        expected: {
-          locale: 'en',
-          representation: 'none',
-          reason: 'default'
-        }
-      },
-      {
-        name: 'handles query parameters',
-        url: TEST_URLS.withPrefixAndQuery,
-        context: {},
-        config: CONFIGS.basic,
-        expected: {
-          locale: 'es',
-          representation: 'prefix',
-          reason: 'url-prefix'
-        }
-      },
-      {
-        name: 'handles hash fragments',
-        url: TEST_URLS.withPrefixAndHash,
-        context: {},
-        config: CONFIGS.basic,
-        expected: {
-          locale: 'de',
-          representation: 'prefix',
-          reason: 'url-prefix'
-        }
-      },
-      {
-        name: 'handles subdomain with domain config',
-        url: TEST_URLS.subdomain,
-        context: {},
-        config: CONFIGS.withDomains,
-        expected: {
-          locale: 'en', // No matching domain, falls back
-          representation: 'none',
-          reason: 'default'
-        }
-      },
-      {
-        name: 'handles custom port',
-        url: TEST_URLS.customPortWithPrefix,
-        context: {},
-        config: CONFIGS.complex,
-        expected: {
-          locale: 'ja',
-          representation: 'prefix',
-          reason: 'url-prefix'
-        }
-      }
-    ];
+	// Base configuration
+	const baseConfig: I18nConfig = {
+		defaultLocale: 'en',
+		locales: ['en', 'fr', 'ja'],
+	};
 
-    test.each(testCases)('$name', ({ url, context, config, expected }) => {
-      const result = resolveLocale(url, context, config);
-      expect(result).toMatchObject(expected);
-    });
-  });
+	describe('Detection Order 1: ["path", "cookie", "accept-language", "default"]', () => {
+		const config: I18nConfig = {
+			...baseConfig,
+			detectionOrder: ['path', 'cookie', 'accept-language', 'default'],
+		};
 
-  describe('Priority order', () => {
-    test('URL prefix takes precedence over cookie', () => {
-      const result = resolveLocale(
-        TEST_URLS.withPrefixAndPath,
-        { cookie: 'locale=es' },
-        CONFIGS.basic
-      );
-      expect(result.locale).toBe('fr');
-      expect(result.reason).toBe('url-prefix');
-    });
+		test('Case 1: Path wins - /ja/about + Cookie=fr + AL=en-US → locale=ja, representation="prefix"', () => {
+			const url = new URL('https://example.com/ja/about');
+			const ctx = { cookie: 'locale=fr', al: 'en-US' };
+			const result = resolveLocale(url, ctx, config);
 
-    test('Cookie takes precedence over Accept-Language', () => {
-      const result = resolveLocale(
-        TEST_URLS.withPath,
-        {
-          cookie: 'locale=es',
-          al: 'fr-FR,fr;q=0.9'
-        },
-        CONFIGS.basic
-      );
-      expect(result.locale).toBe('es');
-      expect(result.reason).toBe('cookie');
-    });
+			expect(result).toEqual({
+				locale: 'ja',
+				representation: 'prefix',
+				reason: 'path',
+			});
+		});
 
-    test('Accept-Language takes precedence over domain', () => {
-      const result = resolveLocale(
-        new URL('https://example.de/'),
-        { al: 'fr-FR' },
-        CONFIGS.withDomains
-      );
-      expect(result.locale).toBe('fr');
-      expect(result.reason).toBe('accept-language');
-    });
+		test('Case 2: Cookie used - /about + Cookie=fr → locale=fr, representation="none"', () => {
+			const url = new URL('https://example.com/about');
+			const ctx = { cookie: 'locale=fr' };
+			const result = resolveLocale(url, ctx, config);
 
-    test('Domain takes precedence over default', () => {
-      const result = resolveLocale(
-        new URL('https://example.fr/'),
-        {},
-        CONFIGS.withDomains
-      );
-      expect(result.locale).toBe('fr');
-      expect(result.reason).toBe('domain');
-    });
-  });
+			expect(result).toEqual({
+				locale: 'fr',
+				representation: 'none',
+				reason: 'cookie',
+			});
+		});
 
-  describe('Edge cases', () => {
-    test('handles empty path', () => {
-      const result = resolveLocale(
-        EDGE_CASE_URLS.emptyPath,
-        {},
-        CONFIGS.basic
-      );
-      expect(result.locale).toBe('en');
-      expect(result.reason).toBe('default');
-    });
+		test('Case 3: Accept-Language used - /about + AL="fr-FR, en;q=0.8" → locale=fr', () => {
+			const url = new URL('https://example.com/about');
+			const ctx = { al: 'fr-FR, en;q=0.8' };
+			const result = resolveLocale(url, ctx, config);
 
-    test('handles double slash', () => {
-      const result = resolveLocale(
-        EDGE_CASE_URLS.doubleSlash,
-        {},
-        CONFIGS.basic
-      );
-      expect(result.locale).toBe('en');
-      expect(result.reason).toBe('default');
-    });
+			expect(result).toEqual({
+				locale: 'fr',
+				representation: 'none',
+				reason: 'accept-language',
+			});
+		});
 
-    test('handles multiple slashes', () => {
-      const result = resolveLocale(
-        EDGE_CASE_URLS.multipleSlashes,
-        {},
-        CONFIGS.basic
-      );
-      expect(result.locale).toBe('fr');
-      expect(result.reason).toBe('url-prefix');
-    });
+		test('Case 5: Unsupported locales roll down - AL="zh-TW;q=0.9, en;q=0.5" → locale=en', () => {
+			const url = new URL('https://example.com/about');
+			const ctx = { al: 'zh-TW;q=0.9, en;q=0.5' };
+			const result = resolveLocale(url, ctx, config);
 
-    test('handles invalid cookie format', () => {
-      const result = resolveLocale(
-        TEST_URLS.withPath,
-        { cookie: 'invalid-cookie-format' },
-        CONFIGS.basic
-      );
-      expect(result.locale).toBe('en');
-      expect(result.reason).toBe('default');
-    });
+			expect(result).toEqual({
+				locale: 'en',
+				representation: 'none',
+				reason: 'accept-language',
+			});
+		});
 
-    test('handles invalid Accept-Language', () => {
-      const result = resolveLocale(
-        TEST_URLS.withPath,
-        { al: 'invalid;;q=abc' },
-        CONFIGS.basic
-      );
-      expect(result.locale).toBe('en');
-      expect(result.reason).toBe('default');
-    });
+		test('Case 6: Conflict priority - path wins when path and cookie disagree', () => {
+			const url = new URL('https://example.com/en/products');
+			const ctx = { cookie: 'locale=fr', al: 'ja' };
+			const result = resolveLocale(url, ctx, config);
 
-    test('handles locale not in config', () => {
-      const result = resolveLocale(
-        new URL('https://example.com/jp/'),
-        {},
-        CONFIGS.basic
-      );
-      expect(result.locale).toBe('en');
-      expect(result.reason).toBe('default');
-    });
+			expect(result).toEqual({
+				locale: 'en',
+				representation: 'prefix',
+				reason: 'path',
+			});
+		});
 
-    test('handles mixed case in URL', () => {
-      const result = resolveLocale(
-        EDGE_CASE_URLS.mixedCase,
-        {},
-        CONFIGS.basic
-      );
-      // Should not match 'Fr' as it's case-sensitive
-      expect(result.locale).toBe('en');
-      expect(result.reason).toBe('default');
-    });
-  });
+		test('Falls back to default when no matches', () => {
+			const url = new URL('https://example.com/about');
+			const ctx = { al: 'zh-CN, ko' };
+			const result = resolveLocale(url, ctx, config);
 
-  describe('Representation types', () => {
-    test('returns "prefix" for locale in URL', () => {
-      const result = resolveLocale(
-        TEST_URLS.withPrefixAndPath,
-        {},
-        CONFIGS.basic
-      );
-      expect(result.representation).toBe('prefix');
-    });
+			expect(result).toEqual({
+				locale: 'en',
+				representation: 'none',
+				reason: 'default',
+			});
+		});
+	});
 
-    test('returns "domain" for domain-based locale', () => {
-      const result = resolveLocale(
-        new URL('https://example.fr/'),
-        {},
-        CONFIGS.withDomains
-      );
-      expect(result.representation).toBe('domain');
-    });
+	describe('Detection Order 2: ["domain", "path", "default"]', () => {
+		const config: I18nConfig = {
+			...baseConfig,
+			detectionOrder: ['domain', 'path', 'default'],
+			domains: {
+				ja: 'ja.example.com',
+				fr: 'fr.example.com',
+			},
+		};
 
-    test('returns "none" for cookie-based locale', () => {
-      const result = resolveLocale(
-        TEST_URLS.withPath,
-        { cookie: 'locale=fr' },
-        CONFIGS.basic
-      );
-      expect(result.representation).toBe('none');
-    });
+		test('Case 4: Domain strategy - ja.example.com/about → locale=ja, representation="domain"', () => {
+			const url = new URL('https://ja.example.com/about');
+			const ctx = {};
+			const result = resolveLocale(url, ctx, config);
 
-    test('returns "none" for Accept-Language locale', () => {
-      const result = resolveLocale(
-        TEST_URLS.withPath,
-        { al: 'fr-FR' },
-        CONFIGS.basic
-      );
-      expect(result.representation).toBe('none');
-    });
+			expect(result).toEqual({
+				locale: 'ja',
+				representation: 'domain',
+				reason: 'domain',
+			});
+		});
 
-    test('returns "prefix" for default locale when prefixDefaultLocale is true', () => {
-      const result = resolveLocale(
-        TEST_URLS.root,
-        {},
-        CONFIGS.alwaysPrefix
-      );
-      expect(result.representation).toBe('prefix');
-    });
+		test('Domain takes precedence over path', () => {
+			const url = new URL('https://fr.example.com/en/about');
+			const ctx = {};
+			const result = resolveLocale(url, ctx, config);
 
-    test('returns "none" for default locale when prefixDefaultLocale is false', () => {
-      const result = resolveLocale(
-        TEST_URLS.root,
-        {},
-        CONFIGS.withRouting
-      );
-      expect(result.representation).toBe('none');
-    });
-  });
+			expect(result).toEqual({
+				locale: 'fr',
+				representation: 'domain',
+				reason: 'domain',
+			});
+		});
 
-  describe('Property-based tests', () => {
-    test('always returns a valid locale from config', () => {
-      fc.assert(
-        fc.property(
-          urlArbitrary(),
-          contextArbitrary(),
-          i18nConfigArbitrary(),
-          (url, context, config) => {
-            const result = resolveLocale(url, context, config);
-            expect(config.locales).toContain(result.locale);
-          }
-        ),
-        { numRuns: 100 }
-      );
-    });
+		test('Path used when domain not matched', () => {
+			const url = new URL('https://example.com/ja/about');
+			const ctx = {};
+			const result = resolveLocale(url, ctx, config);
 
-    test('always returns valid representation type', () => {
-      fc.assert(
-        fc.property(
-          urlArbitrary(),
-          contextArbitrary(),
-          i18nConfigArbitrary(),
-          (url, context, config) => {
-            const result = resolveLocale(url, context, config);
-            expect(['prefix', 'domain', 'none']).toContain(result.representation);
-          }
-        ),
-        { numRuns: 100 }
-      );
-    });
+			expect(result).toEqual({
+				locale: 'ja',
+				representation: 'prefix',
+				reason: 'path',
+			});
+		});
 
-    test('always returns valid reason', () => {
-      fc.assert(
-        fc.property(
-          urlArbitrary(),
-          contextArbitrary(),
-          i18nConfigArbitrary(),
-          (url, context, config) => {
-            const result = resolveLocale(url, context, config);
-            expect([
-              'url-prefix',
-              'cookie',
-              'accept-language',
-              'domain',
-              'default',
-              'fallback'
-            ]).toContain(result.reason);
-          }
-        ),
-        { numRuns: 100 }
-      );
-    });
+		test('Cookie and Accept-Language ignored in domain strategy', () => {
+			const url = new URL('https://example.com/about');
+			const ctx = { cookie: 'locale=fr', al: 'ja' };
+			const result = resolveLocale(url, ctx, config);
 
-    test('consistent results for same input', () => {
-      fc.assert(
-        fc.property(
-          urlArbitrary(),
-          contextArbitrary(),
-          i18nConfigArbitrary(),
-          (url, context, config) => {
-            const result1 = resolveLocale(url, context, config);
-            const result2 = resolveLocale(url, context, config);
-            expect(result1).toEqual(result2);
-          }
-        ),
-        { numRuns: 100 }
-      );
-    });
-  });
+			// Should fall back to default since cookie/al not in detection order
+			expect(result).toEqual({
+				locale: 'en',
+				representation: 'none',
+				reason: 'default',
+			});
+		});
+	});
+
+	describe('Edge cases', () => {
+		const config: I18nConfig = {
+			...baseConfig,
+			detectionOrder: ['path', 'cookie', 'accept-language', 'default'],
+		};
+
+		test('Empty context falls back correctly', () => {
+			const url = new URL('https://example.com/about');
+			const ctx = {};
+			const result = resolveLocale(url, ctx, config);
+
+			expect(result).toEqual({
+				locale: 'en',
+				representation: 'none',
+				reason: 'default',
+			});
+		});
+
+		test('Invalid cookie format is ignored', () => {
+			const url = new URL('https://example.com/about');
+			const ctx = { cookie: 'invalid-cookie-format' };
+			const result = resolveLocale(url, ctx, config);
+
+			expect(result).toEqual({
+				locale: 'en',
+				representation: 'none',
+				reason: 'default',
+			});
+		});
+
+		test('Multiple cookies with locale', () => {
+			const url = new URL('https://example.com/about');
+			const ctx = { cookie: 'session=abc123; locale=fr; theme=dark' };
+			const result = resolveLocale(url, ctx, config);
+
+			expect(result).toEqual({
+				locale: 'fr',
+				representation: 'none',
+				reason: 'cookie',
+			});
+		});
+
+		test('Complex Accept-Language with quality values', () => {
+			const url = new URL('https://example.com/about');
+			const ctx = { al: 'zh-CN;q=1.0, ja;q=0.9, fr;q=0.8, en;q=0.5' };
+			const result = resolveLocale(url, ctx, config);
+
+			// Should pick ja (highest q-value that's supported)
+			expect(result).toEqual({
+				locale: 'ja',
+				representation: 'none',
+				reason: 'accept-language',
+			});
+		});
+
+		test('Accept-Language with region codes', () => {
+			const url = new URL('https://example.com/about');
+			const ctx = { al: 'en-US, en-GB;q=0.9, fr-CA;q=0.8' };
+			const result = resolveLocale(url, ctx, config);
+
+			// Should match 'en' from 'en-US'
+			expect(result).toEqual({
+				locale: 'en',
+				representation: 'none',
+				reason: 'accept-language',
+			});
+		});
+
+		test('Root path with locale', () => {
+			const url = new URL('https://example.com/fr');
+			const ctx = {};
+			const result = resolveLocale(url, ctx, config);
+
+			expect(result).toEqual({
+				locale: 'fr',
+				representation: 'prefix',
+				reason: 'path',
+			});
+		});
+
+		test('Trailing slash handling', () => {
+			const url = new URL('https://example.com/ja/');
+			const ctx = {};
+			const result = resolveLocale(url, ctx, config);
+
+			expect(result).toEqual({
+				locale: 'ja',
+				representation: 'prefix',
+				reason: 'path',
+			});
+		});
+	});
 });

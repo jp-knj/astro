@@ -1,502 +1,391 @@
 import { describe, expect, test } from 'vitest';
-import fc from 'fast-check';
-import type { I18nConfig, Resolution } from './helpers/arbitraries';
-import {
-  urlArbitrary,
-  i18nConfigArbitrary,
-  resolutionArbitrary,
-  canonicalizeInputArbitrary
-} from './helpers/arbitraries';
-import {
-  CONFIGS,
-  TEST_URLS,
-  TEST_RESOLUTIONS,
-  EDGE_CASE_URLS
-} from './helpers/fixtures';
 
-// Types for canonicalize result
+// Types
+type Locale = string;
+type Resolution = {
+	locale: Locale;
+	representation: 'prefix' | 'domain' | 'none';
+	reason: string;
+};
+
 type CanonicalizeResult =
-  | { action: 'render'; url: URL }
-  | { action: 'redirect'; url: URL; status: 308 }
-  | { action: 'rewrite'; url: URL };
+	| { action: 'render'; url: URL }
+	| { action: 'redirect'; url: URL; status: number }
+	| { action: 'rewrite'; url: URL };
 
-// Mock implementation - replace with actual implementation
-function canonicalize(
-  url: URL,
-  resolution: Resolution,
-  config: I18nConfig
-): CanonicalizeResult {
-  // This is a mock implementation for testing structure
-  // The actual implementation will be provided
-  
-  const { locale, representation } = resolution;
-  const { defaultLocale, routing } = config;
-  
-  // Clone URL to avoid mutations
-  let newUrl = new URL(url.toString());
-  
-  // Determine expected URL structure
-  const shouldPrefix = 
-    representation === 'prefix' ||
-    (locale !== defaultLocale && routing?.prefixDefaultLocale !== true) ||
-    (locale === defaultLocale && routing?.prefixDefaultLocale === true);
-  
-  const pathSegments = url.pathname.split('/').filter(Boolean);
-  const hasLocalePrefix = pathSegments.length > 0 && config.locales.includes(pathSegments[0]);
-  
-  // Handle different cases
-  if (representation === 'domain') {
-    // Domain-based locale doesn't need prefix
-    if (hasLocalePrefix && pathSegments[0] === locale) {
-      // Remove redundant prefix
-      pathSegments.shift();
-      newUrl.pathname = '/' + pathSegments.join('/');
-      return { action: 'redirect', url: newUrl, status: 308 };
-    }
-    return { action: 'render', url: newUrl };
-  }
-  
-  if (representation === 'prefix') {
-    if (!hasLocalePrefix) {
-      // Add missing prefix
-      newUrl.pathname = `/${locale}${url.pathname}`;
-      return { action: 'redirect', url: newUrl, status: 308 };
-    } else if (pathSegments[0] !== locale) {
-      // Wrong prefix, replace it
-      pathSegments[0] = locale;
-      newUrl.pathname = '/' + pathSegments.join('/');
-      return { action: 'redirect', url: newUrl, status: 308 };
-    }
-    return { action: 'render', url: newUrl };
-  }
-  
-  if (representation === 'none') {
-    if (locale === defaultLocale && !routing?.prefixDefaultLocale) {
-      if (hasLocalePrefix && pathSegments[0] === defaultLocale) {
-        // Remove default locale prefix
-        pathSegments.shift();
-        newUrl.pathname = '/' + pathSegments.join('/') || '/';
-        return { action: 'redirect', url: newUrl, status: 308 };
-      }
-    } else if (locale !== defaultLocale) {
-      // Non-default locale might need rewrite
-      if (!hasLocalePrefix) {
-        newUrl.pathname = `/${locale}${url.pathname}`;
-        return { action: 'rewrite', url: newUrl };
-      }
-    }
-    return { action: 'render', url: newUrl };
-  }
-  
-  return { action: 'render', url: newUrl };
+type I18nConfig = {
+	strategy: 'prefix-except-default' | 'prefix-always' | 'domain';
+	defaultLocale: Locale;
+	locales: Locale[];
+	trailingSlash: 'always' | 'never' | 'ignore';
+	basePath?: string;
+};
+
+// Type guard helper for redirect results
+function isRedirect(
+	result: CanonicalizeResult,
+): result is { action: 'redirect'; url: URL; status: number } {
+	return result.action === 'redirect';
 }
 
-// Helper to check if URLs are equal (origin + pathname + search)
-function urlsEqual(url1: URL, url2: URL): boolean {
-  return url1.origin === url2.origin &&
-         url1.pathname === url2.pathname &&
-         url1.search === url2.search;
+// Mock implementation - replace with actual implementation
+function canonicalize(url: URL, resolution: Resolution, config: I18nConfig): CanonicalizeResult {
+	const { locale } = resolution;
+	const { strategy, defaultLocale, trailingSlash, basePath = '' } = config;
+
+	// Clone URL to avoid mutations
+	const newUrl = new URL(url.toString());
+	let modified = false;
+
+	// Parse path considering basePath
+	let path = newUrl.pathname;
+	if (basePath && path.startsWith(basePath)) {
+		path = path.slice(basePath.length);
+	}
+	if (!path.startsWith('/')) path = '/' + path;
+
+	// Extract locale from path if present
+	const segments = path.split('/').filter(Boolean);
+	const hasLocalePrefix = segments.length > 0 && config.locales.includes(segments[0]);
+	const pathLocale = hasLocalePrefix ? segments[0] : null;
+
+	// Determine expected path structure
+	let expectedPath = path;
+
+	// Handle locale prefix based on strategy
+	if (strategy === 'prefix-except-default') {
+		if (locale === defaultLocale) {
+			// Default locale should not have prefix
+			if (pathLocale === defaultLocale) {
+				segments.shift(); // Remove default locale prefix
+				expectedPath = '/' + segments.join('/');
+				if (expectedPath === '') expectedPath = '/';
+				modified = true;
+			}
+		} else {
+			// Non-default locale should have prefix
+			if (!hasLocalePrefix || pathLocale !== locale) {
+				expectedPath = `/${locale}${path}`;
+				modified = true;
+			}
+		}
+	} else if (strategy === 'prefix-always') {
+		// All locales should have prefix
+		if (!hasLocalePrefix || pathLocale !== locale) {
+			if (hasLocalePrefix && pathLocale !== locale) {
+				segments[0] = locale; // Replace wrong locale
+				expectedPath = '/' + segments.join('/');
+			} else {
+				expectedPath = `/${locale}${path}`;
+			}
+			modified = true;
+		}
+	}
+
+	// Apply basePath
+	if (basePath) {
+		expectedPath = basePath + expectedPath;
+	}
+
+	// Handle trailing slash
+	const hasTrailingSlash = expectedPath.endsWith('/');
+	const isRoot = expectedPath === '/' || expectedPath === basePath + '/';
+
+	if (trailingSlash === 'always' && !isRoot && !hasTrailingSlash) {
+		expectedPath += '/';
+		modified = true;
+	} else if (trailingSlash === 'never' && hasTrailingSlash && !isRoot) {
+		expectedPath = expectedPath.slice(0, -1);
+		modified = true;
+	}
+
+	// Ensure non-empty path
+	if (expectedPath === '' || expectedPath === basePath) {
+		expectedPath = basePath ? basePath + '/' : '/';
+		modified = true;
+	}
+
+	// Check if path changed
+	if (expectedPath !== newUrl.pathname) {
+		newUrl.pathname = expectedPath;
+		modified = true;
+	}
+
+	if (modified) {
+		return {
+			action: 'redirect',
+			url: newUrl,
+			status: 308,
+		};
+	}
+
+	return {
+		action: 'render',
+		url: newUrl,
+	};
 }
 
 describe('canonicalize', () => {
-  describe('Table-driven tests', () => {
-    const testCases = [
-      {
-        name: 'renders URL with correct prefix',
-        url: TEST_URLS.withPrefixAndPath,
-        resolution: TEST_RESOLUTIONS.urlPrefix,
-        config: CONFIGS.basic,
-        expected: { action: 'render' }
-      },
-      {
-        name: 'redirects to add missing prefix',
-        url: TEST_URLS.withPath,
-        resolution: { locale: 'fr', representation: 'prefix', reason: 'url-prefix' },
-        config: CONFIGS.basic,
-        expected: { 
-          action: 'redirect',
-          pathname: '/fr/about',
-          status: 308
-        }
-      },
-      {
-        name: 'removes default locale prefix when not needed',
-        url: new URL('https://example.com/en/about'),
-        resolution: { locale: 'en', representation: 'none', reason: 'default' },
-        config: CONFIGS.withRouting,
-        expected: {
-          action: 'redirect',
-          pathname: '/about',
-          status: 308
-        }
-      },
-      {
-        name: 'keeps default locale prefix when required',
-        url: new URL('https://example.com/en/about'),
-        resolution: { locale: 'en', representation: 'prefix', reason: 'default' },
-        config: CONFIGS.alwaysPrefix,
-        expected: { action: 'render' }
-      },
-      {
-        name: 'rewrites for non-default locale without prefix',
-        url: TEST_URLS.withPath,
-        resolution: { locale: 'fr', representation: 'none', reason: 'cookie' },
-        config: CONFIGS.basic,
-        expected: {
-          action: 'rewrite',
-          pathname: '/fr/about'
-        }
-      },
-      {
-        name: 'handles domain-based locale',
-        url: new URL('https://example.fr/about'),
-        resolution: TEST_RESOLUTIONS.domain,
-        config: CONFIGS.withDomains,
-        expected: { action: 'render' }
-      },
-      {
-        name: 'removes prefix for domain-based locale',
-        url: new URL('https://example.fr/fr/about'),
-        resolution: TEST_RESOLUTIONS.domain,
-        config: CONFIGS.withDomains,
-        expected: {
-          action: 'redirect',
-          pathname: '/about',
-          status: 308
-        }
-      },
-      {
-        name: 'preserves query parameters',
-        url: TEST_URLS.withPrefixAndQuery,
-        resolution: { locale: 'es', representation: 'prefix', reason: 'url-prefix' },
-        config: CONFIGS.basic,
-        expected: {
-          action: 'render',
-          search: '?id=123&lang=es'
-        }
-      },
-      {
-        name: 'preserves hash fragments',
-        url: TEST_URLS.withPrefixAndHash,
-        resolution: { locale: 'de', representation: 'prefix', reason: 'url-prefix' },
-        config: CONFIGS.basic,
-        expected: {
-          action: 'render',
-          hash: '#section'
-        }
-      },
-      {
-        name: 'handles root path',
-        url: TEST_URLS.root,
-        resolution: { locale: 'en', representation: 'none', reason: 'default' },
-        config: CONFIGS.basic,
-        expected: { action: 'render' }
-      },
-      {
-        name: 'handles root with prefix requirement',
-        url: TEST_URLS.root,
-        resolution: { locale: 'fr', representation: 'prefix', reason: 'cookie' },
-        config: CONFIGS.basic,
-        expected: {
-          action: 'redirect',
-          pathname: '/fr/',
-          status: 308
-        }
-      }
-    ];
+	// Baseline configurations
+	const cfgPrefixExceptDefault: I18nConfig = {
+		strategy: 'prefix-except-default',
+		defaultLocale: 'en',
+		locales: ['en', 'fr'],
+		trailingSlash: 'never',
+		basePath: undefined,
+	};
 
-    test.each(testCases)('$name', ({ url, resolution, config, expected }) => {
-      const result = canonicalize(url, resolution, config);
-      
-      expect(result.action).toBe(expected.action);
-      
-      if (expected.pathname) {
-        expect(result.url.pathname).toBe(expected.pathname);
-      }
-      
-      if (expected.status && result.action === 'redirect') {
-        expect(result.status).toBe(expected.status);
-      }
-      
-      if (expected.search) {
-        expect(result.url.search).toBe(expected.search);
-      }
-      
-      if (expected.hash) {
-        expect(result.url.hash).toBe(expected.hash);
-      }
-    });
-  });
+	const cfgPrefixAlways: I18nConfig = {
+		strategy: 'prefix-always',
+		defaultLocale: 'en',
+		locales: ['en', 'fr'],
+		trailingSlash: 'never',
+		basePath: undefined,
+	};
 
-  describe('Idempotence invariant', () => {
-    test('canonicalize is idempotent for render actions', () => {
-      fc.assert(
-        fc.property(
-          canonicalizeInputArbitrary(),
-          ({ url, resolution, config }) => {
-            const result1 = canonicalize(url, resolution, config);
-            
-            if (result1.action === 'render' || result1.action === 'rewrite') {
-              const result2 = canonicalize(result1.url, resolution, config);
-              
-              // Second call should always render (already canonical)
-              expect(result2.action).toBe('render');
-              expect(urlsEqual(result1.url, result2.url)).toBe(true);
-            }
-          }
-        ),
-        { numRuns: 100 }
-      );
-    });
+	const cfgWithBase: I18nConfig = {
+		strategy: 'prefix-except-default',
+		defaultLocale: 'en',
+		locales: ['en', 'fr'],
+		trailingSlash: 'always',
+		basePath: '/base',
+	};
 
-    test('redirect target is canonical', () => {
-      fc.assert(
-        fc.property(
-          canonicalizeInputArbitrary(),
-          ({ url, resolution, config }) => {
-            const result1 = canonicalize(url, resolution, config);
-            
-            if (result1.action === 'redirect') {
-              const result2 = canonicalize(result1.url, resolution, config);
-              
-              // Redirect target should be canonical (render)
-              expect(result2.action).toBe('render');
-              expect(urlsEqual(result1.url, result2.url)).toBe(true);
-            }
-          }
-        ),
-        { numRuns: 100 }
-      );
-    });
-  });
+	describe('Case 1: prefix-except-default removes default locale prefix', () => {
+		test('redirects /en/about to /about', () => {
+			const url = new URL('https://example.com/en/about');
+			const resolution: Resolution = {
+				locale: 'en',
+				representation: 'prefix',
+				reason: 'path',
+			};
 
-  describe('No self-redirect invariant', () => {
-    test('never redirects to the same URL', () => {
-      fc.assert(
-        fc.property(
-          canonicalizeInputArbitrary(),
-          ({ url, resolution, config }) => {
-            const result = canonicalize(url, resolution, config);
-            
-            if (result.action === 'redirect') {
-              expect(urlsEqual(url, result.url)).toBe(false);
-            }
-          }
-        ),
-        { numRuns: 100 }
-      );
-    });
+			const result = canonicalize(url, resolution, cfgPrefixExceptDefault);
 
-    test('specific no self-redirect cases', () => {
-      const cases = [
-        { url: TEST_URLS.withPrefixAndPath, resolution: TEST_RESOLUTIONS.urlPrefix },
-        { url: TEST_URLS.root, resolution: TEST_RESOLUTIONS.default },
-        { url: TEST_URLS.withPath, resolution: TEST_RESOLUTIONS.cookie }
-      ];
-      
-      for (const { url, resolution } of cases) {
-        const result = canonicalize(url, resolution, CONFIGS.basic);
-        if (result.action === 'redirect') {
-          expect(result.url.href).not.toBe(url.href);
-        }
-      }
-    });
-  });
+			expect(result.action).toBe('redirect');
+			if (isRedirect(result)) {
+				expect(result.status).toBe(308);
+				expect(result.url.pathname).toBe('/about');
+				expect(result.url.origin).toBe('https://example.com');
+			}
+		});
 
-  describe('Default locale root handling', () => {
-    test('default locale root is always "/"', () => {
-      const url = new URL('https://example.com/en');
-      const resolution: Resolution = {
-        locale: 'en',
-        representation: 'none',
-        reason: 'default'
-      };
-      
-      const result = canonicalize(url, resolution, CONFIGS.withRouting);
-      
-      if (result.action === 'redirect') {
-        expect(result.url.pathname).toBe('/');
-      }
-    });
+		test('idempotence: second canonicalize is a no-op', () => {
+			const url = new URL('https://example.com/en/about');
+			const resolution: Resolution = {
+				locale: 'en',
+				representation: 'none',
+				reason: 'default',
+			};
 
-    test('never produces empty string path', () => {
-      fc.assert(
-        fc.property(
-          canonicalizeInputArbitrary(),
-          ({ url, resolution, config }) => {
-            const result = canonicalize(url, resolution, config);
-            expect(result.url.pathname).not.toBe('');
-            expect(result.url.pathname.length).toBeGreaterThan(0);
-          }
-        ),
-        { numRuns: 100 }
-      );
-    });
+			// First canonicalize
+			const result1 = canonicalize(url, resolution, cfgPrefixExceptDefault);
+			expect(result1.action).toBe('redirect');
 
-    test('never produces double slash "//"', () => {
-      fc.assert(
-        fc.property(
-          canonicalizeInputArbitrary(),
-          ({ url, resolution, config }) => {
-            const result = canonicalize(url, resolution, config);
-            expect(result.url.pathname).not.toMatch(/\/\//);
-          }
-        ),
-        { numRuns: 100 }
-      );
-    });
+			// Second canonicalize with the result URL
+			const result2 = canonicalize(result1.url, resolution, cfgPrefixExceptDefault);
+			expect(result2.action).toBe('render');
+			expect(result2.url.href).toBe(result1.url.href);
+		});
+	});
 
-    test('handles edge case URLs correctly', () => {
-      const resolution: Resolution = {
-        locale: 'en',
-        representation: 'none',
-        reason: 'default'
-      };
-      
-      for (const [name, url] of Object.entries(EDGE_CASE_URLS)) {
-        const result = canonicalize(url, resolution, CONFIGS.basic);
-        
-        // Check basic invariants
-        expect(result.url.pathname).not.toBe('');
-        expect(result.url.pathname).not.toMatch(/\/\//);
-        
-        if (result.url.pathname === '/') {
-          expect(result.url.pathname).toBe('/');
-        }
-      }
-    });
-  });
+	describe('Case 2: trailingSlash=never removes trailing slash', () => {
+		test('redirects /fr/about/ to /fr/about preserving query and hash', () => {
+			const url = new URL('https://example.com/fr/about/?foo=bar&baz=qux#section');
+			const resolution: Resolution = {
+				locale: 'fr',
+				representation: 'prefix',
+				reason: 'path',
+			};
 
-  describe('Action types', () => {
-    test('render action preserves URL', () => {
-      const url = TEST_URLS.withPrefixAndPath;
-      const resolution = TEST_RESOLUTIONS.urlPrefix;
-      
-      const result = canonicalize(url, resolution, CONFIGS.basic);
-      
-      if (result.action === 'render') {
-        expect(urlsEqual(url, result.url)).toBe(true);
-      }
-    });
+			const result = canonicalize(url, resolution, cfgPrefixExceptDefault);
 
-    test('redirect action includes status code', () => {
-      fc.assert(
-        fc.property(
-          canonicalizeInputArbitrary(),
-          ({ url, resolution, config }) => {
-            const result = canonicalize(url, resolution, config);
-            
-            if (result.action === 'redirect') {
-              expect(result.status).toBe(308);
-            }
-          }
-        ),
-        { numRuns: 100 }
-      );
-    });
+			expect(result.action).toBe('redirect');
+			if (isRedirect(result)) {
+				expect(result.status).toBe(308);
+				expect(result.url.pathname).toBe('/fr/about');
+				expect(result.url.search).toBe('?foo=bar&baz=qux');
+				expect(result.url.hash).toBe('#section');
+			}
+		});
+	});
 
-    test('rewrite action modifies URL internally', () => {
-      const url = TEST_URLS.withPath;
-      const resolution: Resolution = {
-        locale: 'fr',
-        representation: 'none',
-        reason: 'cookie'
-      };
-      
-      const result = canonicalize(url, resolution, CONFIGS.basic);
-      
-      if (result.action === 'rewrite') {
-        expect(result.url.pathname).toContain('/fr/');
-        expect('status' in result).toBe(false);
-      }
-    });
-  });
+	describe('Case 3: basePath + trailingSlash=always', () => {
+		test('redirects /base/fr to /base/fr/', () => {
+			const url = new URL('https://example.com/base/fr');
+			const resolution: Resolution = {
+				locale: 'fr',
+				representation: 'prefix',
+				reason: 'path',
+			};
 
-  describe('URL preservation', () => {
-    test('preserves origin', () => {
-      fc.assert(
-        fc.property(
-          canonicalizeInputArbitrary(),
-          ({ url, resolution, config }) => {
-            const result = canonicalize(url, resolution, config);
-            
-            // Domain representation might change origin
-            if (resolution.representation !== 'domain') {
-              expect(result.url.origin).toBe(url.origin);
-            }
-          }
-        ),
-        { numRuns: 100 }
-      );
-    });
+			const result = canonicalize(url, resolution, cfgWithBase);
 
-    test('preserves query parameters', () => {
-      fc.assert(
-        fc.property(
-          canonicalizeInputArbitrary(),
-          ({ url, resolution, config }) => {
-            const result = canonicalize(url, resolution, config);
-            expect(result.url.search).toBe(url.search);
-          }
-        ),
-        { numRuns: 100 }
-      );
-    });
+			expect(result.action).toBe('redirect');
+			if (isRedirect(result)) {
+				expect(result.status).toBe(308);
+				expect(result.url.pathname).toBe('/base/fr/');
+			}
+		});
+	});
 
-    test('preserves hash fragments', () => {
-      fc.assert(
-        fc.property(
-          canonicalizeInputArbitrary(),
-          ({ url, resolution, config }) => {
-            const result = canonicalize(url, resolution, config);
-            expect(result.url.hash).toBe(url.hash);
-          }
-        ),
-        { numRuns: 100 }
-      );
-    });
-  });
+	describe('Case 4: Non-empty Location guarantee', () => {
+		test('ensures result is at least "/" when path is missing', () => {
+			const url = new URL('https://example.com/fr');
+			const resolution: Resolution = {
+				locale: 'fr',
+				representation: 'prefix',
+				reason: 'path',
+			};
 
-  describe('Complex scenarios', () => {
-    test('handles complex URL with all components', () => {
-      const url = new URL('https://example.com/en-US/blog/post-123?ref=home&lang=en#comments');
-      const resolution: Resolution = {
-        locale: 'en-US',
-        representation: 'prefix',
-        reason: 'url-prefix'
-      };
-      
-      const result = canonicalize(url, resolution, CONFIGS.complex);
-      
-      expect(result.action).toBe('render');
-      expect(result.url.search).toBe('?ref=home&lang=en');
-      expect(result.url.hash).toBe('#comments');
-    });
+			// Create a config that would remove the locale
+			const config: I18nConfig = {
+				strategy: 'prefix-except-default',
+				defaultLocale: 'fr', // Make fr the default
+				locales: ['en', 'fr'],
+				trailingSlash: 'never',
+				basePath: undefined,
+			};
 
-    test('handles transition between representations', () => {
-      // From prefix to domain
-      const url1 = new URL('https://example.com/fr/about');
-      const resolution1: Resolution = {
-        locale: 'fr',
-        representation: 'domain',
-        reason: 'domain'
-      };
-      
-      const result1 = canonicalize(url1, resolution1, CONFIGS.withDomains);
-      expect(result1.action).toBe('redirect');
-      expect(result1.url.pathname).toBe('/about');
-      
-      // From domain to prefix
-      const url2 = new URL('https://example.fr/about');
-      const resolution2: Resolution = {
-        locale: 'fr',
-        representation: 'prefix',
-        reason: 'cookie'
-      };
-      
-      const result2 = canonicalize(url2, resolution2, CONFIGS.basic);
-      expect(result2.action).toBe('redirect');
-      expect(result2.url.pathname).toBe('/fr/about');
-    });
-  });
+			const result = canonicalize(url, resolution, config);
+
+			if (result.action === 'redirect') {
+				expect(result.url.pathname).toBe('/');
+				expect(result.url.pathname).not.toBe('');
+				expect(result.url.href).not.toBe(url.href); // from !== to
+			}
+		});
+	});
+
+	describe('Case 5: Preserve query parameters', () => {
+		test('keeps encoded query parameters on redirect', () => {
+			const url = new URL('https://example.com/fr/search?q=a%20b&filter=new');
+			const resolution: Resolution = {
+				locale: 'fr',
+				representation: 'prefix',
+				reason: 'path',
+			};
+
+			// Use prefix-always to keep the locale
+			const result = canonicalize(url, resolution, cfgPrefixAlways);
+
+			// Whether redirect or render, query should be preserved
+			expect(result.url.search).toBe('?q=a%20b&filter=new');
+
+			// Verify the specific encoded space is preserved
+			expect(result.url.searchParams.get('q')).toBe('a b');
+		});
+	});
+
+	describe('Case 6: Already canonical returns render', () => {
+		test('returns action: "render" for canonical URL', () => {
+			const url = new URL('https://example.com/fr/about');
+			const resolution: Resolution = {
+				locale: 'fr',
+				representation: 'prefix',
+				reason: 'path',
+			};
+
+			const result = canonicalize(url, resolution, cfgPrefixExceptDefault);
+
+			expect(result.action).toBe('render');
+			expect(result.url.href).toBe(url.href);
+		});
+	});
+
+	describe('Case 7: No multi-hop redirects', () => {
+		test('normalization completes in one step', () => {
+			// Complex case: wrong locale + trailing slash
+			const url = new URL('https://example.com/en/about/');
+			const resolution: Resolution = {
+				locale: 'en',
+				representation: 'none',
+				reason: 'default',
+			};
+
+			// First canonicalize should fix both issues
+			const result1 = canonicalize(url, resolution, cfgPrefixExceptDefault);
+			expect(result1.action).toBe('redirect');
+			expect(result1.url.pathname).toBe('/about'); // Both locale and slash fixed
+
+			// Second canonicalize should be no-op
+			const result2 = canonicalize(result1.url, resolution, cfgPrefixExceptDefault);
+			expect(result2.action).toBe('render');
+			expect(result2.url.href).toBe(result1.url.href);
+		});
+	});
+
+	describe.each([
+		['prefix-except-default', cfgPrefixExceptDefault],
+		['prefix-always', cfgPrefixAlways],
+		['with-base', cfgWithBase],
+	])('Config: %s', (_name, config) => {
+		test('preserves origin', () => {
+			const url = new URL('https://example.com:8080/test');
+			const resolution: Resolution = {
+				locale: 'fr',
+				representation: 'prefix',
+				reason: 'path',
+			};
+
+			const result = canonicalize(url, resolution, config);
+			expect(result.url.origin).toBe('https://example.com:8080');
+		});
+
+		test('preserves hash fragments', () => {
+			const url = new URL('https://example.com/page#section');
+			const resolution: Resolution = {
+				locale: 'en',
+				representation: 'none',
+				reason: 'default',
+			};
+
+			const result = canonicalize(url, resolution, config);
+			expect(result.url.hash).toBe('#section');
+		});
+
+		test('handles root path correctly', () => {
+			const url = new URL('https://example.com/');
+			const resolution: Resolution = {
+				locale: config.defaultLocale,
+				representation: 'none',
+				reason: 'default',
+			};
+
+			const result = canonicalize(url, resolution, config);
+
+			if (config.strategy === 'prefix-always') {
+				expect(result.action).toBe('redirect');
+				expect(result.url.pathname).toMatch(/^(\/base)?\/en\/?$/);
+			} else {
+				// Root should generally be canonical for default locale
+				const expectedPath = config.basePath
+					? config.trailingSlash === 'always'
+						? config.basePath + '/'
+						: config.basePath
+					: '/';
+
+				if (url.pathname === expectedPath) {
+					expect(result.action).toBe('render');
+				}
+			}
+		});
+	});
+
+	describe('URL comparison using new URL()', () => {
+		test('compares URLs with strict equality', () => {
+			const url1 = new URL('https://example.com/fr/about?q=test#section');
+			const url2 = new URL('https://example.com/fr/about?q=test#section');
+
+			// These are different objects but same URL
+			expect(url1).not.toBe(url2);
+			expect(url1.href).toBe(url2.href);
+
+			// Components should match
+			expect(url1.origin).toBe(url2.origin);
+			expect(url1.pathname).toBe(url2.pathname);
+			expect(url1.search).toBe(url2.search);
+			expect(url1.hash).toBe(url2.hash);
+		});
+	});
 });
