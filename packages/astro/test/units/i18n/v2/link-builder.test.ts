@@ -473,4 +473,209 @@ describe('href', () => {
 			});
 		});
 	});
+
+	describe('Link Builder Integration with Resolver and Canonicalizer', () => {
+		// Simple mock implementations for integration testing
+		function mockResolveLocale(
+			url: URL,
+			_ctx: { cookie?: string; al?: string },
+			config: I18nConfig,
+		): { locale: string; representation: 'prefix' | 'none'; reason: string } {
+			const pathSegments = url.pathname.split('/').filter(Boolean);
+			if (pathSegments.length > 0 && config.locales.includes(pathSegments[0])) {
+				return {
+					locale: pathSegments[0],
+					representation: 'prefix',
+					reason: 'path',
+				};
+			}
+			return {
+				locale: config.defaultLocale,
+				representation: 'none',
+				reason: 'default',
+			};
+		}
+
+		function mockCanonicalizeSimple(
+			url: URL,
+			resolution: { locale: string; representation: string; reason: string },
+			config: I18nConfig,
+		): { action: 'render' | 'redirect'; url: URL; status?: number } {
+			const { locale } = resolution;
+			const { strategy, defaultLocale } = config;
+			const newUrl = new URL(url.toString());
+
+			// Check if URL needs modification
+			const pathSegments = newUrl.pathname.split('/').filter(Boolean);
+			const hasLocalePrefix = pathSegments[0] && config.locales.includes(pathSegments[0]);
+
+			if (strategy === 'prefix-except-default' && locale === defaultLocale && hasLocalePrefix) {
+				// Remove default locale prefix
+				pathSegments.shift();
+				newUrl.pathname = '/' + pathSegments.join('/') || '/';
+				return { action: 'redirect', url: newUrl, status: 308 };
+			}
+
+			if (strategy === 'prefix-except-default' && locale !== defaultLocale && !hasLocalePrefix) {
+				// Add non-default locale prefix
+				newUrl.pathname = `/${locale}${newUrl.pathname}`;
+				return { action: 'redirect', url: newUrl, status: 308 };
+			}
+
+			return { action: 'render', url: newUrl };
+		}
+
+		test('generated links are already canonical', () => {
+			// Generate a link
+			const url = href('about', { locale: 'fr' }, baseConfig);
+			expect(url).toBe('/fr/about');
+
+			// Parse as full URL
+			const fullUrl = new URL(`https://example.com${url}`);
+
+			// Resolve locale from the generated URL
+			const resolution = mockResolveLocale(fullUrl, {}, baseConfig);
+			expect(resolution.locale).toBe('fr');
+
+			// Canonicalize should return 'render' since it's already correct
+			const result = mockCanonicalizeSimple(fullUrl, resolution, baseConfig);
+			expect(result.action).toBe('render', 'Generated URL should already be canonical');
+		});
+
+		test('generated links resolve to correct locale', () => {
+			const testCases = [
+				{ locale: 'en', expected: '/about' },
+				{ locale: 'fr', expected: '/fr/about' },
+				{ locale: 'ja', expected: '/ja/about' },
+			];
+
+			testCases.forEach(({ locale, expected }) => {
+				// Generate link
+				const url = href('about', { locale }, baseConfig);
+				expect(url).toBe(expected);
+
+				// Verify it resolves back to the same locale
+				const fullUrl = new URL(`https://example.com${url}`);
+				const resolution = mockResolveLocale(fullUrl, {}, baseConfig);
+
+				expect(resolution.locale).toBe(locale, `URL ${url} should resolve to locale ${locale}`);
+			});
+		});
+
+		test('canonical links work with resolver', () => {
+			// Generate canonical link for default locale
+			const url = href('products', { locale: 'en', canonical: true }, baseConfig);
+			expect(url).toBe('/products'); // No prefix for default
+
+			// Verify resolver understands it as default locale
+			const fullUrl = new URL(`https://example.com${url}`);
+			const resolution = mockResolveLocale(fullUrl, {}, baseConfig);
+
+			expect(resolution.locale).toBe('en');
+			expect(resolution.reason).toBe('default');
+		});
+
+		test('links with basePath work with canonicalizer', () => {
+			const configWithBase: I18nConfig = {
+				...baseConfig,
+				basePath: '/app',
+			};
+
+			// Generate link with basePath
+			const url = href('blog', { locale: 'ja' }, configWithBase);
+			expect(url).toBe('/app/ja/blog');
+
+			// Remove basePath for resolver (simulating real flow)
+			const pathWithoutBase = url.slice(configWithBase.basePath!.length);
+			const fullUrl = new URL(`https://example.com${pathWithoutBase}`);
+
+			const resolution = mockResolveLocale(fullUrl, {}, configWithBase);
+			expect(resolution.locale).toBe('ja');
+
+			// Canonicalizer should accept it as-is
+			const result = mockCanonicalizeSimple(fullUrl, resolution, configWithBase);
+			expect(result.action).toBe('render');
+		});
+
+		test('prefix-always strategy links are canonical', () => {
+			const configAlways: I18nConfig = {
+				...baseConfig,
+				strategy: 'prefix-always',
+			};
+
+			// Generate link for default locale with prefix-always
+			const url = href('home', { locale: 'en' }, configAlways);
+			expect(url).toBe('/en/home'); // Always has prefix
+
+			// Verify it's canonical
+			const fullUrl = new URL(`https://example.com${url}`);
+			const resolution = mockResolveLocale(fullUrl, {}, configAlways);
+
+			expect(resolution.locale).toBe('en');
+			expect(resolution.representation).toBe('prefix');
+
+			// Should not need redirect
+			const result = mockCanonicalizeSimple(fullUrl, resolution, configAlways);
+			expect(result.action).toBe('render');
+		});
+
+		test('encoded parameters work through full flow', () => {
+			// Generate link with special characters
+			const params = { query: 'hello world', tag: '日本語' };
+			const url = href('search/[query]/[tag]', { locale: 'ja', params }, baseConfig);
+
+			// URL should have encoded parameters
+			expect(url).toContain('hello%20world');
+			expect(url).toContain('%E6%97%A5%E6%9C%AC%E8%AA%9E');
+
+			// Parse and resolve
+			const fullUrl = new URL(`https://example.com${url}`);
+			const resolution = mockResolveLocale(fullUrl, {}, baseConfig);
+
+			expect(resolution.locale).toBe('ja');
+
+			// Should be canonical
+			const result = mockCanonicalizeSimple(fullUrl, resolution, baseConfig);
+			expect(result.action).toBe('render');
+		});
+
+		test('empty route (homepage) works with resolver', () => {
+			// Generate homepage link
+			const url = href('', { locale: 'fr' }, baseConfig);
+			expect(url).toBe('/fr/');
+
+			// Resolve locale
+			const fullUrl = new URL(`https://example.com${url}`);
+			const resolution = mockResolveLocale(fullUrl, {}, baseConfig);
+
+			expect(resolution.locale).toBe('fr');
+			expect(resolution.representation).toBe('prefix');
+		});
+
+		test('link generation respects canonicalizer rules', () => {
+			// Test that link builder produces URLs that canonicalizer accepts
+			const patterns = ['about', 'blog/[id]', 'shop/[category]/[product]'];
+			const locales = ['en', 'fr', 'ja'];
+
+			patterns.forEach((pattern) => {
+				locales.forEach((locale) => {
+					// Generate link
+					const params = pattern.includes('[')
+						? { id: '123', category: 'electronics', product: 'phone' }
+						: {};
+					const url = href(pattern, { locale, params }, baseConfig);
+
+					// Parse and check with canonicalizer
+					const fullUrl = new URL(`https://example.com${url}`);
+					const resolution = mockResolveLocale(fullUrl, {}, baseConfig);
+					const result = mockCanonicalizeSimple(fullUrl, resolution, baseConfig);
+
+					expect(result.action).toBe(
+						'render',
+						`Generated URL ${url} for locale ${locale} should be canonical`,
+					);
+				});
+			});
+		});
+	});
 });
