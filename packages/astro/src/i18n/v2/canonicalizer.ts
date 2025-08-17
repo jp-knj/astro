@@ -3,25 +3,27 @@
  * Ensures URLs are in canonical form with idempotence guarantee
  */
 
-import type { CanonicalizeResult, I18nConfig, Resolution } from './types.js';
+import type { CanonicalizeResult, I18nConfig, Resolution, Manifest } from './types.js';
 
 /**
  * Canonicalizes a URL based on locale resolution and i18n configuration
- * 
+ *
  * Invariants:
  * - Idempotence: canonicalize(canonicalize(url)) === canonicalize(url)
  * - No self-redirect: Never redirects to the same URL
  * - Preserves query parameters and hash fragments
- * 
+ *
  * @param url - The URL to canonicalize
  * @param resolution - The resolved locale information
  * @param config - i18n configuration
+ * @param manifest - Optional manifest to check route availability
  * @returns Canonicalization result with action and URL
  */
 export function canonicalize(
 	url: URL,
 	resolution: Resolution,
 	config: I18nConfig,
+	manifest?: Manifest,
 ): CanonicalizeResult {
 	const { locale } = resolution;
 	const { strategy, defaultLocale, trailingSlash, basePath = '' } = config;
@@ -144,8 +146,22 @@ export function canonicalize(
 	}
 
 	// Check if this is a missing route that needs rewriting
-	// In a real implementation, this would check against the manifest
-	// For now, we'll return render for canonical URLs
+	if (manifest) {
+		// Extract route key from the canonical path
+		const routeKey = extractRouteKey(newUrl.pathname, config);
+
+		// Check if route exists for the locale
+		const localeRoutes = manifest.get(locale);
+		if (localeRoutes && !localeRoutes.has(routeKey)) {
+			// Route doesn't exist for this locale, needs rewriting
+			return {
+				action: 'rewrite',
+				url: newUrl,
+			};
+		}
+	}
+
+	// URL is canonical and route exists (or no manifest to check)
 	return {
 		action: 'render',
 		url: newUrl,
@@ -153,9 +169,44 @@ export function canonicalize(
 }
 
 /**
+ * Extracts the route key from a pathname
+ *
+ * @param pathname - The URL pathname
+ * @param config - i18n configuration
+ * @returns The route key without locale prefix or basePath
+ */
+function extractRouteKey(pathname: string, config: I18nConfig): string {
+	let path = pathname;
+
+	// Remove basePath if present
+	if (config.basePath && path.startsWith(config.basePath)) {
+		path = path.slice(config.basePath.length);
+	}
+
+	// Remove leading slash
+	if (path.startsWith('/')) {
+		path = path.slice(1);
+	}
+
+	// Remove trailing slash
+	if (path.endsWith('/')) {
+		path = path.slice(0, -1);
+	}
+
+	// Parse segments and remove locale if present
+	const segments = path.split('/').filter(Boolean);
+	if (segments.length > 0 && config.locales.includes(segments[0])) {
+		segments.shift();
+	}
+
+	// Return the route key
+	return segments.join('/');
+}
+
+/**
  * Checks if a URL needs canonicalization
  * Useful for quick checks without full canonicalization
- * 
+ *
  * @param url - The URL to check
  * @param resolution - The resolved locale information
  * @param config - i18n configuration

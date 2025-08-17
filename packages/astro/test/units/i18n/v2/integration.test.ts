@@ -1,129 +1,14 @@
 import { describe, expect, test } from 'vitest';
-
-// Types
-type Locale = string;
-type RouteKey = string;
-
-type Resolution = {
-	locale: Locale;
-	representation: 'prefix' | 'domain' | 'none';
-	reason: string;
-};
-
-type CanonicalizeResult =
-	| { action: 'render'; url: URL }
-	| { action: 'redirect'; url: URL; status: number }
-	| { action: 'rewrite'; url: URL };
-
-type I18nConfig = {
-	strategy: 'prefix-except-default' | 'prefix-always' | 'domain';
-	defaultLocale: Locale;
-	locales: Locale[];
-	trailingSlash: 'always' | 'never' | 'ignore';
-	basePath?: string;
-	detectionOrder?: string[];
-	domains?: Record<Locale, string>;
-};
-
-type Manifest = Map<Locale, Set<RouteKey>>;
-type FallbackChains = Map<Locale, Locale[]>;
-
-// Import mock implementations (in real code, these would be actual imports)
-function resolveLocale(
-	url: URL,
-	ctx: { cookie?: string; al?: string },
-	cfg: I18nConfig,
-): Resolution {
-	// Simplified implementation
-	const pathSegments = url.pathname.split('/').filter(Boolean);
-	if (pathSegments.length > 0 && cfg.locales.includes(pathSegments[0])) {
-		return {
-			locale: pathSegments[0],
-			representation: 'prefix',
-			reason: 'path',
-		};
-	}
-
-	if (ctx.cookie) {
-		const match = ctx.cookie.match(/locale=([^;]+)/);
-		if (match && cfg.locales.includes(match[1])) {
-			return {
-				locale: match[1],
-				representation: 'none',
-				reason: 'cookie',
-			};
-		}
-	}
-
-	return {
-		locale: cfg.defaultLocale,
-		representation: 'none',
-		reason: 'default',
-	};
-}
-
-function canonicalize(url: URL, resolution: Resolution, config: I18nConfig): CanonicalizeResult {
-	const { locale } = resolution;
-	const { strategy, defaultLocale, trailingSlash } = config;
-
-	const newUrl = new URL(url.toString());
-	let modified = false;
-
-	// Check if path needs locale prefix
-	const pathSegments = newUrl.pathname.split('/').filter(Boolean);
-	const hasLocalePrefix = pathSegments[0] && config.locales.includes(pathSegments[0]);
-
-	if (strategy === 'prefix-except-default' && locale === defaultLocale && hasLocalePrefix) {
-		// Remove default locale prefix
-		pathSegments.shift();
-		newUrl.pathname = '/' + pathSegments.join('/') || '/';
-		modified = true;
-	} else if (strategy === 'prefix-except-default' && locale !== defaultLocale && !hasLocalePrefix) {
-		// Add non-default locale prefix
-		newUrl.pathname = `/${locale}${newUrl.pathname}`;
-		modified = true;
-	} else if (strategy === 'prefix-always' && !hasLocalePrefix) {
-		// Add locale prefix
-		newUrl.pathname = `/${locale}${newUrl.pathname}`;
-		modified = true;
-	}
-
-	// Handle trailing slash
-	if (trailingSlash === 'never' && newUrl.pathname !== '/' && newUrl.pathname.endsWith('/')) {
-		newUrl.pathname = newUrl.pathname.slice(0, -1);
-		modified = true;
-	}
-
-	if (modified) {
-		return { action: 'redirect', url: newUrl, status: 308 };
-	}
-
-	// Check if route exists for locale (would trigger rewrite in real implementation)
-	const routeKey = extractRouteKey(newUrl.pathname);
-	if (routeKey === 'missing-page') {
-		return { action: 'rewrite', url: newUrl };
-	}
-
-	return { action: 'render', url: newUrl };
-}
-
-function pickLocale(
-	routeKey: RouteKey,
-	requested: Locale,
-	fallback: FallbackChains,
-	manifest: Manifest,
-): { locale: Locale } | null {
-	const chain = fallback.get(requested) || [requested];
-
-	for (const locale of chain) {
-		const routes = manifest.get(locale);
-		if (routes?.has(routeKey)) {
-			return { locale };
-		}
-	}
-
-	return null;
-}
+import { resolveLocale } from '../../../../src/i18n/v2/resolver.js';
+import { canonicalize } from '../../../../src/i18n/v2/canonicalizer.js';
+import { pickLocale } from '../../../../src/i18n/v2/fallback.js';
+import type {
+	I18nConfig,
+	RequestContext,
+	Manifest,
+	FallbackChains,
+	RouteKey,
+} from '../../../../src/i18n/v2/types.js';
 
 function extractRouteKey(pathname: string): RouteKey {
 	const segments = pathname.split('/').filter(Boolean);
@@ -167,7 +52,7 @@ describe('End-to-End i18n Flow Integration', () => {
 			};
 
 			// Step 1: Resolve locale from path
-			const resolution = resolveLocale(request.url, {}, config);
+			const resolution = resolveLocale(request.url, {} as RequestContext, config);
 			expect(resolution.locale).toBe('fr');
 			expect(resolution.reason).toBe('path');
 
@@ -186,7 +71,11 @@ describe('End-to-End i18n Flow Integration', () => {
 			};
 
 			// Step 1: Resolve locale from cookie
-			const resolution = resolveLocale(request.url, { cookie: request.cookie }, config);
+			const resolution = resolveLocale(
+				request.url,
+				{ cookie: request.cookie } as RequestContext,
+				config,
+			);
 			expect(resolution.locale).toBe('fr');
 			expect(resolution.reason).toBe('cookie');
 
@@ -205,7 +94,7 @@ describe('End-to-End i18n Flow Integration', () => {
 			};
 
 			// Step 1: Resolve locale from path
-			const resolution = resolveLocale(request.url, {}, config);
+			const resolution = resolveLocale(request.url, {} as RequestContext, config);
 			expect(resolution.locale).toBe('en');
 
 			// Step 2: Canonicalize - should remove default locale prefix
@@ -222,11 +111,11 @@ describe('End-to-End i18n Flow Integration', () => {
 			};
 
 			// Step 1: Resolve locale
-			const resolution = resolveLocale(request.url, {}, config);
+			const resolution = resolveLocale(request.url, {} as RequestContext, config);
 			expect(resolution.locale).toBe('ja');
 
 			// Step 2: Canonicalize - detects missing route
-			const canonical = canonicalize(request.url, resolution, config);
+			const canonical = canonicalize(request.url, resolution, config, manifest);
 			expect(canonical.action).toBe('rewrite');
 
 			// Step 3: Use fallback to find available locale
@@ -245,7 +134,7 @@ describe('End-to-End i18n Flow Integration', () => {
 			};
 
 			// Step 1: Resolve locale
-			const resolution = resolveLocale(request.url, {}, config);
+			const resolution = resolveLocale(request.url, {} as RequestContext, config);
 			expect(resolution.locale).toBe('fr');
 
 			// Step 2: Check if route exists for locale
@@ -266,7 +155,7 @@ describe('End-to-End i18n Flow Integration', () => {
 
 			// In real implementation, accept-language would be processed
 			// For this test, we'll simulate default locale
-			const resolution = resolveLocale(request.url, {}, config);
+			const resolution = resolveLocale(request.url, {} as RequestContext, config);
 			expect(resolution.locale).toBe('en');
 			expect(resolution.reason).toBe('default');
 
@@ -279,7 +168,7 @@ describe('End-to-End i18n Flow Integration', () => {
 				url: new URL('https://example.com/fr/about?lang=fr&ref=home#section'),
 			};
 
-			const resolution = resolveLocale(request.url, {}, config);
+			const resolution = resolveLocale(request.url, {} as RequestContext, config);
 			const canonical = canonicalize(request.url, resolution, config);
 
 			expect(canonical.url.search).toBe('?lang=fr&ref=home');
@@ -291,7 +180,7 @@ describe('End-to-End i18n Flow Integration', () => {
 				url: new URL('https://example.com/fr/about/'),
 			};
 
-			const resolution = resolveLocale(request.url, {}, config);
+			const resolution = resolveLocale(request.url, {} as RequestContext, config);
 			const canonical = canonicalize(request.url, resolution, config);
 
 			// With trailingSlash: 'never', should redirect to remove it
@@ -309,7 +198,11 @@ describe('End-to-End i18n Flow Integration', () => {
 				cookie: 'locale=invalid',
 			};
 
-			const resolution = resolveLocale(request.url, { cookie: request.cookie }, config);
+			const resolution = resolveLocale(
+				request.url,
+				{ cookie: request.cookie } as RequestContext,
+				config,
+			);
 			expect(resolution.locale).toBe('en'); // Falls back to default
 			expect(resolution.reason).toBe('default');
 		});
@@ -335,7 +228,7 @@ describe('End-to-End i18n Flow Integration', () => {
 
 			urls.forEach((urlStr) => {
 				const url = new URL(urlStr);
-				const resolution = resolveLocale(url, {}, config);
+				const resolution = resolveLocale(url, {} as RequestContext, config);
 
 				// All should resolve to 'fr' from path
 				expect(resolution.locale).toBe('fr');

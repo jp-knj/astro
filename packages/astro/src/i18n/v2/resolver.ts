@@ -3,28 +3,24 @@
  * Detects locale from various sources in configurable order
  */
 
-import type { I18nConfig, Locale, RequestContext, Resolution } from './types.js';
+import type { I18nConfig, RequestContext, Resolution } from './types.js';
 
 /**
  * Resolves the locale from a request URL and context
- * 
+ *
  * Detection order (configurable):
  * 1. Path segment (e.g., /fr/about)
  * 2. Cookie (e.g., locale=fr)
  * 3. Accept-Language header
  * 4. Domain mapping
  * 5. Default locale
- * 
+ *
  * @param url - The request URL to analyze
  * @param context - Request context containing cookies and headers
  * @param config - i18n configuration
  * @returns Resolution object with detected locale and metadata
  */
-export function resolveLocale(
-	url: URL,
-	context: RequestContext,
-	config: I18nConfig,
-): Resolution {
+export function resolveLocale(url: URL, context: RequestContext, config: I18nConfig): Resolution {
 	const detectionOrder = config.detectionOrder || ['path', 'cookie', 'accept-language', 'domain'];
 
 	for (const method of detectionOrder) {
@@ -64,13 +60,13 @@ function detectByMethod(
 
 function detectFromPath(url: URL, config: I18nConfig): Resolution | null {
 	const pathSegments = url.pathname.split('/').filter(Boolean);
-	
+
 	if (pathSegments.length === 0) {
 		return null;
 	}
 
 	const firstSegment = pathSegments[0];
-	
+
 	// Check if first segment is a locale
 	if (config.locales.includes(firstSegment)) {
 		return {
@@ -85,7 +81,7 @@ function detectFromPath(url: URL, config: I18nConfig): Resolution | null {
 		const baseSegments = config.basePath.split('/').filter(Boolean);
 		// Remove base path segments from the beginning
 		const remainingSegments = pathSegments.slice(baseSegments.length);
-		
+
 		if (remainingSegments.length > 0 && config.locales.includes(remainingSegments[0])) {
 			return {
 				locale: remainingSegments[0],
@@ -151,8 +147,8 @@ function detectFromAcceptLanguage(
 		}
 
 		// Try to find locale that starts with the language
-		const matchingLocale = config.locales.find(locale => 
-			locale.toLowerCase().startsWith(language.toLowerCase())
+		const matchingLocale = config.locales.find((locale) =>
+			locale.toLowerCase().startsWith(language.toLowerCase()),
 		);
 		if (matchingLocale) {
 			return {
@@ -175,7 +171,11 @@ function detectFromDomain(url: URL, config: I18nConfig): Resolution | null {
 
 	// Find locale by domain
 	for (const [locale, domain] of Object.entries(config.domains)) {
-		if (domain === hostname || domain === `https://${hostname}` || domain === `http://${hostname}`) {
+		if (
+			domain === hostname ||
+			domain === `https://${hostname}` ||
+			domain === `http://${hostname}`
+		) {
 			return {
 				locale,
 				representation: 'domain',
@@ -190,8 +190,8 @@ function detectFromDomain(url: URL, config: I18nConfig): Resolution | null {
 // Helper function to parse cookies
 function parseCookies(cookieHeader: string): Map<string, string> {
 	const cookies = new Map<string, string>();
-	
-	cookieHeader.split(';').forEach(cookie => {
+
+	cookieHeader.split(';').forEach((cookie) => {
 		const [key, value] = cookie.trim().split('=');
 		if (key && value) {
 			cookies.set(key, decodeURIComponent(value));
@@ -205,7 +205,7 @@ function parseCookies(cookieHeader: string): Map<string, string> {
 function parseAcceptLanguage(acceptLanguage: string): Array<{ code: string; quality: number }> {
 	return acceptLanguage
 		.split(',')
-		.map(lang => {
+		.map((lang) => {
 			const [code, q] = lang.trim().split(';');
 			const quality = q ? parseFloat(q.replace('q=', '')) : 1.0;
 			return { code: code.trim(), quality };

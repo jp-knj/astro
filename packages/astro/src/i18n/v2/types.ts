@@ -57,14 +57,10 @@ export function isRedirect(
 	return result.action === 'redirect';
 }
 
-export function isRender(
-	result: CanonicalizeResult,
-): result is { action: 'render'; url: URL } {
+export function isRender(result: CanonicalizeResult): result is { action: 'render'; url: URL } {
 	return result.action === 'render';
 }
 
-export function isRewrite(
-	result: CanonicalizeResult,
-): result is { action: 'rewrite'; url: URL } {
+export function isRewrite(result: CanonicalizeResult): result is { action: 'rewrite'; url: URL } {
 	return result.action === 'rewrite';
 }

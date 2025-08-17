@@ -1,67 +1,25 @@
 import { describe, expect, test } from 'vitest';
-
-// Types
-type Locale = string;
-type RouteKey = string;
-type PickLocaleResult = { locale: Locale } | null;
-
-// Manifest structure: locale -> route -> availability
-type Manifest = Map<Locale, Map<RouteKey, boolean>>;
-
-// Fallback chains
-type FallbackChains = Map<Locale, Locale[]>;
-
-// Mock implementation - replace with actual implementation
-function pickLocale(
-	routeKey: RouteKey,
-	requested: Locale,
-	fallback: FallbackChains,
-	manifest: Manifest,
-): PickLocaleResult {
-	// Get fallback chain for requested locale
-	const chain = fallback.get(requested) || [requested];
-
-	// Try each locale in the chain (single-step resolution)
-	for (const locale of chain) {
-		const localeManifest = manifest.get(locale);
-
-		if (!localeManifest) {
-			// Locale not in manifest, skip
-			continue;
-		}
-
-		// Check if route exists for this locale
-		const routeAvailable = localeManifest.get(routeKey);
-
-		if (routeAvailable === true) {
-			return { locale };
-		}
-		// If routeAvailable === false, continue to next in chain
-		// If routeAvailable === undefined, route doesn't exist in this locale, continue
-	}
-
-	// No suitable locale found
-	return null;
-}
+import { pickLocale } from '../../../../src/i18n/v2/fallback.js';
+import type { FallbackChains, Locale, Manifest, RouteKey } from '../../../../src/i18n/v2/types.js';
 
 describe('pickLocale', () => {
 	// Setup manifest
 	const createManifest = (): Manifest => {
-		const manifest = new Map<Locale, Map<RouteKey, boolean>>();
+		const manifest = new Map<Locale, Set<RouteKey>>();
 
-		// manifest.en = {"post/[id]": true, "about": true}
-		const enRoutes = new Map<RouteKey, boolean>();
-		enRoutes.set('post/[id]', true);
-		enRoutes.set('about', true);
+		// manifest.en = {"post/[id]", "about"}
+		const enRoutes = new Set<RouteKey>();
+		enRoutes.add('post/[id]');
+		enRoutes.add('about');
 		manifest.set('en', enRoutes);
 
-		// manifest.fr = {"about": false}
-		const frRoutes = new Map<RouteKey, boolean>();
-		frRoutes.set('about', false);
+		// manifest.fr = {} (empty - "about" is false means not available)
+		const frRoutes = new Set<RouteKey>();
+		// Note: 'about' is not added, simulating it being unavailable
 		manifest.set('fr', frRoutes);
 
 		// manifest.ja = {} (empty)
-		const jaRoutes = new Map<RouteKey, boolean>();
+		const jaRoutes = new Set<RouteKey>();
 		manifest.set('ja', jaRoutes);
 
 		return manifest;
@@ -110,7 +68,7 @@ describe('pickLocale', () => {
 			multiHopFallback.set('fr', ['fr', 'en']); // fr falls back to en
 
 			// Add es to manifest with empty routes
-			const esRoutes = new Map<RouteKey, boolean>();
+			const esRoutes = new Set<RouteKey>();
 			manifest.set('es', esRoutes);
 
 			// Request 'about' for 'es'
@@ -139,25 +97,25 @@ describe('pickLocale', () => {
 	});
 
 	describe('Route availability states', () => {
-		test('Distinguishes between false (disabled) and undefined (missing)', () => {
-			// fr has 'about' = false (explicitly disabled)
-			const frAbout = manifest.get('fr')?.get('about');
-			expect(frAbout).toBe(false);
+		test('Distinguishes between unavailable and missing routes', () => {
+			// fr doesn't have 'about' (not in Set)
+			const frHasAbout = manifest.get('fr')?.has('about');
+			expect(frHasAbout).toBe(false);
 
-			// fr doesn't have 'post/[id]' (missing/undefined)
-			const frPost = manifest.get('fr')?.get('post/[id]');
-			expect(frPost).toBeUndefined();
+			// fr doesn't have 'post/[id]' (not in Set)
+			const frHasPost = manifest.get('fr')?.has('post/[id]');
+			expect(frHasPost).toBe(false);
 
 			// Both cases should trigger fallback
 			expect(pickLocale('about', 'fr', fallback, manifest)).toEqual({ locale: 'en' });
 			expect(pickLocale('post/[id]', 'fr', fallback, manifest)).toEqual({ locale: 'en' });
 		});
 
-		test('Only returns locale when route is explicitly true', () => {
-			// Create a test manifest where route is present but not true
-			const testManifest = new Map<Locale, Map<RouteKey, boolean>>();
-			const testRoutes = new Map<RouteKey, boolean>();
-			testRoutes.set('test-route', false);
+		test('Only returns locale when route exists in Set', () => {
+			// Create a test manifest where route is not present
+			const testManifest = new Map<Locale, Set<RouteKey>>();
+			const testRoutes = new Set<RouteKey>();
+			// test-route is not added to the Set
 			testManifest.set('test-locale', testRoutes);
 
 			const result = pickLocale('test-route', 'test-locale', new Map(), testManifest);
@@ -168,7 +126,7 @@ describe('pickLocale', () => {
 
 	describe('Edge cases', () => {
 		test('Empty manifest returns null', () => {
-			const emptyManifest = new Map<Locale, Map<RouteKey, boolean>>();
+			const emptyManifest = new Map<Locale, Set<RouteKey>>();
 
 			const result = pickLocale('any-route', 'any-locale', fallback, emptyManifest);
 
@@ -207,20 +165,20 @@ describe('pickLocale', () => {
 	describe('Performance characteristics', () => {
 		test('Uses O(1) Map lookups', () => {
 			// This test verifies the implementation uses Maps for O(1) access
-			const largeManifest = new Map<Locale, Map<RouteKey, boolean>>();
+			const largeManifest = new Map<Locale, Set<RouteKey>>();
 
 			// Create a large manifest
 			for (let i = 0; i < 1000; i++) {
-				const routes = new Map<RouteKey, boolean>();
+				const routes = new Set<RouteKey>();
 				for (let j = 0; j < 100; j++) {
-					routes.set(`route-${j}`, true);
+					routes.add(`route-${j}`);
 				}
 				largeManifest.set(`locale-${i}`, routes);
 			}
 
 			// Add our test case
-			const testRoutes = new Map<RouteKey, boolean>();
-			testRoutes.set('target-route', true);
+			const testRoutes = new Set<RouteKey>();
+			testRoutes.add('target-route');
 			largeManifest.set('target-locale', testRoutes);
 
 			// Should still be fast with O(1) lookups
@@ -236,21 +194,21 @@ describe('pickLocale', () => {
 	describe('Fallback chain validation', () => {
 		test('Fallback chains are processed in order', () => {
 			// Create a manifest where order matters
-			const orderedManifest = new Map<Locale, Map<RouteKey, boolean>>();
+			const orderedManifest = new Map<Locale, Set<RouteKey>>();
 
-			// First locale in chain has route disabled
-			const firstRoutes = new Map<RouteKey, boolean>();
-			firstRoutes.set('ordered-route', false);
+			// First locale in chain doesn't have the route
+			const firstRoutes = new Set<RouteKey>();
+			// ordered-route is not added
 			orderedManifest.set('first', firstRoutes);
 
-			// Second locale has route enabled
-			const secondRoutes = new Map<RouteKey, boolean>();
-			secondRoutes.set('ordered-route', true);
+			// Second locale has the route
+			const secondRoutes = new Set<RouteKey>();
+			secondRoutes.add('ordered-route');
 			orderedManifest.set('second', secondRoutes);
 
-			// Third locale also has route enabled
-			const thirdRoutes = new Map<RouteKey, boolean>();
-			thirdRoutes.set('ordered-route', true);
+			// Third locale also has the route
+			const thirdRoutes = new Set<RouteKey>();
+			thirdRoutes.add('ordered-route');
 			orderedManifest.set('third', thirdRoutes);
 
 			const orderedFallback = new Map<Locale, Locale[]>();

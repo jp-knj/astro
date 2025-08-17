@@ -7,11 +7,11 @@ import type { FallbackChains, Locale, Manifest, RouteKey } from './types.js';
 
 /**
  * Picks the best available locale for a route using fallback chains
- * 
+ *
  * Invariant:
  * - Single-step fallback: Resolution completes in one pass
  * - O(1) lookups using Map and Set data structures
- * 
+ *
  * @param routeKey - The route key to check availability for
  * @param requestedLocale - The originally requested locale
  * @param fallbackChains - Map of locale to fallback chain
@@ -31,7 +31,7 @@ export function pickLocale(
 	// Walk through fallback chain (single pass)
 	for (const locale of chain) {
 		const routes = manifest.get(locale);
-		
+
 		// O(1) Set lookup
 		if (routes?.has(routeKey)) {
 			return { locale };
@@ -44,7 +44,7 @@ export function pickLocale(
 
 /**
  * Creates fallback chains from configuration
- * 
+ *
  * @param fallbackConfig - Object mapping locales to their fallback locales
  * @param locales - List of all available locales
  * @returns FallbackChains map for use with pickLocale
@@ -75,7 +75,7 @@ export function createFallbackChains(
 
 		while (depth < maxDepth) {
 			const fallback = fallbackConfig[current];
-			
+
 			if (!fallback) {
 				// No more fallbacks
 				break;
@@ -101,13 +101,11 @@ export function createFallbackChains(
 /**
  * Builds a manifest from route definitions
  * Used at build time to create the locale -> routes mapping
- * 
+ *
  * @param routes - Array of route definitions with paths and supported locales
  * @returns Manifest map for use with pickLocale
  */
-export function buildManifest(
-	routes: Array<{ path: string; locales: Locale[] }>,
-): Manifest {
+export function buildManifest(routes: Array<{ path: string; locales: Locale[] }>): Manifest {
 	const manifest = new Map<Locale, Set<RouteKey>>();
 
 	for (const route of routes) {
@@ -127,19 +125,17 @@ export function buildManifest(
 /**
  * Extracts a route key from a file path
  * Converts file paths to normalized route keys
- * 
+ *
  * @param path - File path (e.g., "pages/blog/[slug].astro")
  * @returns Normalized route key (e.g., "blog/[slug]")
  */
 function extractRouteKey(path: string): RouteKey {
 	// Remove file extension and pages prefix
-	let key = path
-		.replace(/^(src\/)?pages\//, '')
-		.replace(/\.(astro|mdx|md|jsx?|tsx?)$/, '');
+	let key = path.replace(/^(src\/)?pages\//, '').replace(/\.(astro|mdx|md|jsx?|tsx?)$/, '');
 
 	// Convert index files
 	key = key.replace(/\/index$/, '');
-	
+
 	// Root index becomes empty string
 	if (key === 'index') {
 		return '';
@@ -154,31 +150,24 @@ function extractRouteKey(path: string): RouteKey {
 /**
  * Checks if a route is available for a specific locale
  * Direct lookup without fallback
- * 
+ *
  * @param routeKey - The route key to check
  * @param locale - The locale to check for
  * @param manifest - The manifest to check against
  * @returns true if route is available for the locale
  */
-export function hasRoute(
-	routeKey: RouteKey,
-	locale: Locale,
-	manifest: Manifest,
-): boolean {
+export function hasRoute(routeKey: RouteKey, locale: Locale, manifest: Manifest): boolean {
 	return manifest.get(locale)?.has(routeKey) ?? false;
 }
 
 /**
  * Gets all available locales for a specific route
- * 
+ *
  * @param routeKey - The route key to check
  * @param manifest - The manifest to check against
  * @returns Array of locales that have this route
  */
-export function getLocalesForRoute(
-	routeKey: RouteKey,
-	manifest: Manifest,
-): Locale[] {
+export function getLocalesForRoute(routeKey: RouteKey, manifest: Manifest): Locale[] {
 	const locales: Locale[] = [];
 
 	for (const [locale, routes] of manifest) {
