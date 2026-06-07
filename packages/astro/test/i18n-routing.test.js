@@ -567,6 +567,46 @@ describe('[DEV] i18n routing', () => {
 		});
 	});
 });
+describe('[DEV] i18n localized 404', () => {
+	/** @type {import('./test-utils').Fixture} */
+	let fixture;
+	/** @type {import('./test-utils').DevServer} */
+	let devServer;
+
+	before(async () => {
+		fixture = await loadFixture({
+			root: './fixtures/i18n-locale-404/',
+		});
+		devServer = await fixture.startDevServer();
+	});
+
+	after(async () => {
+		await devServer.stop();
+	});
+
+	it('renders the localized 404 page for a locale with a custom 404', async () => {
+		const response = await fixture.fetch('/pt/does-not-exist');
+		assert.equal(response.status, 404);
+		const text = await response.text();
+		assert.equal(text.includes('Localized PT 404'), true);
+		assert.equal(text.includes('Current Locale: pt'), true);
+	});
+
+	it('falls back to the global 404 page for a locale without a custom 404', async () => {
+		const response = await fixture.fetch('/it/does-not-exist');
+		assert.equal(response.status, 404);
+		const text = await response.text();
+		assert.equal(text.includes('Global 404'), true);
+		assert.equal(text.includes('Current Locale: it'), true);
+	});
+
+	it('uses the global 404 page for requests without a locale prefix', async () => {
+		const response = await fixture.fetch('/does-not-exist');
+		assert.equal(response.status, 404);
+		const text = await response.text();
+		assert.equal(text.includes('Global 404'), true);
+	});
+});
 describe('[SSG] i18n routing', () => {
 	describe('i18n routing', () => {
 		/** @type {import('./test-utils').Fixture} */
@@ -1496,6 +1536,45 @@ describe('[SSG] i18n routing', () => {
 		});
 	});
 });
+describe('[SSR] i18n localized 404', () => {
+	/** @type {import('./test-utils').Fixture} */
+	let fixture;
+	let app;
+
+	before(async () => {
+		fixture = await loadFixture({
+			root: './fixtures/i18n-locale-404/',
+			output: 'server',
+			adapter: testAdapter(),
+		});
+		await fixture.build();
+		app = await fixture.loadTestAdapterApp();
+	});
+
+	it('renders the localized 404 page for a locale with a custom 404', async () => {
+		const response = await app.render(new Request('http://example.com/pt/does-not-exist'));
+		assert.equal(response.status, 404);
+		const text = await response.text();
+		assert.equal(text.includes('Localized PT 404'), true);
+		assert.equal(text.includes('Current Locale: pt'), true);
+	});
+
+	it('falls back to the global 404 page for a locale without a custom 404', async () => {
+		const response = await app.render(new Request('http://example.com/it/does-not-exist'));
+		assert.equal(response.status, 404);
+		const text = await response.text();
+		assert.equal(text.includes('Global 404'), true);
+		assert.equal(text.includes('Current Locale: it'), true);
+	});
+
+	it('uses the global 404 page for requests without a locale prefix', async () => {
+		const response = await app.render(new Request('http://example.com/does-not-exist'));
+		assert.equal(response.status, 404);
+		const text = await response.text();
+		assert.equal(text.includes('Global 404'), true);
+	});
+});
+
 describe('[SSR] i18n routing', () => {
 	let app;
 

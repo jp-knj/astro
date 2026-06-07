@@ -16,10 +16,12 @@ import { RenderContext } from '../core/render-context.js';
 import { createRequest } from '../core/request.js';
 import { redirectTemplate } from '../core/routing/3xx.js';
 import { matchAllRoutes } from '../core/routing/index.js';
-import { isRoute404, isRoute500 } from '../core/routing/match.js';
+import { isRoute500 } from '../core/routing/match.js';
 import { PERSIST_SYMBOL } from '../core/session.js';
+import { getErrorRoutePath } from '../i18n/index.js';
 import { getSortedPreloadedMatches } from '../prerender/routing.js';
 import type { ComponentInstance, RoutesList } from '../types/astro.js';
+import type { Locales } from '../types/public/config.js';
 import type { RouteData } from '../types/public/internal.js';
 import type { DevPipeline } from './pipeline.js';
 import { writeSSRResult, writeWebResponse } from './response.js';
@@ -42,8 +44,13 @@ function isLoggedRequest(url: string) {
 	return url !== '/favicon.ico';
 }
 
-function getCustom404Route(manifestData: RoutesList): RouteData | undefined {
-	return manifestData.routes.find((r) => isRoute404(r.route));
+function getCustom404Route(
+	manifestData: RoutesList,
+	pathname: string,
+	locales: Locales | undefined,
+): RouteData | undefined {
+	const errorRoutePath = getErrorRoutePath(pathname, 404, manifestData.routes, locales);
+	return manifestData.routes.find((r) => r.route === errorRoutePath);
 }
 
 function getCustom500Route(manifestData: RoutesList): RouteData | undefined {
@@ -109,7 +116,7 @@ export async function matchRoute(
 		);
 	}
 
-	const custom404 = getCustom404Route(routesList);
+	const custom404 = getCustom404Route(routesList, pathname, pipeline.i18n?.locales);
 
 	if (custom404) {
 		const filePath = new URL(`./${custom404.component}`, config.root);
@@ -289,7 +296,13 @@ export async function handleRoute({
 		response.body === null &&
 		response.headers.get(REROUTE_DIRECTIVE_HEADER) !== 'no'
 	) {
-		const fourOhFourRoute = await matchRoute('/404', routesList, pipeline);
+		const fourOhFourRoutePath = getErrorRoutePath(
+			pathname,
+			404,
+			routesList.routes,
+			pipeline.i18n?.locales,
+		);
+		const fourOhFourRoute = await matchRoute(fourOhFourRoutePath, routesList, pipeline);
 		if (fourOhFourRoute) {
 			renderContext = await RenderContext.create({
 				locals,
@@ -374,8 +387,9 @@ export async function handleRoute({
 
 /** Check for /404 and /500 custom routes to compute status code */
 function getStatusByMatchedRoute(matchedRoute?: MatchedRoute) {
-	if (matchedRoute?.route.route === '/404') return 404;
-	if (matchedRoute?.route.route === '/500') return 500;
+	const route = matchedRoute?.route.route;
+	if (route?.endsWith('/404')) return 404;
+	if (route?.endsWith('/500')) return 500;
 	return undefined;
 }
 

@@ -4,12 +4,11 @@ import {
 	isInternalPath,
 } from '@astrojs/internal-helpers/path';
 import { matchPattern, type RemotePattern } from '@astrojs/internal-helpers/remote';
-import { normalizeTheLocale } from '../../i18n/index.js';
+import { getErrorRoutePath, normalizeTheLocale } from '../../i18n/index.js';
 import type { RoutesList } from '../../types/astro.js';
 import type { RouteData, SSRManifest } from '../../types/public/internal.js';
 import {
 	clientAddressSymbol,
-	DEFAULT_404_COMPONENT,
 	REROUTABLE_STATUS_CODES,
 	REROUTE_DIRECTIVE_HEADER,
 	responseSentSymbol,
@@ -517,9 +516,13 @@ export class App {
 		// a "fake" 404 route, so we can call the RenderContext.render
 		// and hit the middleware, which might be able to return a correct Response.
 		if (!routeData) {
-			routeData = this.#manifestData.routes.find(
-				(route) => route.component === '404.astro' || route.component === DEFAULT_404_COMPONENT,
+			const errorRoutePath = getErrorRoutePath(
+				this.#getPathnameFromRequest(request),
+				404,
+				this.#manifestData.routes,
+				this.#manifest.i18n?.locales,
 			);
+			routeData = this.#manifestData.routes.find((route) => route.route === errorRoutePath);
 		}
 		if (!routeData) {
 			this.#logger.debug('router', "Astro hasn't found routes that match " + request.url);
@@ -640,14 +643,20 @@ export class App {
 			prerenderedErrorPageFetch,
 		}: RenderErrorOptions,
 	): Promise<Response> {
-		const errorRoutePath = `/${status}${this.#manifest.trailingSlash === 'always' ? '/' : ''}`;
+		const errorRoutePath = getErrorRoutePath(
+			this.#getPathnameFromRequest(request),
+			status,
+			this.#manifestData.routes,
+			this.#manifest.i18n?.locales,
+			this.#manifest.trailingSlash === 'always',
+		);
 		const errorRouteData = matchRoute(errorRoutePath, this.#manifestData);
 		const url = new URL(request.url);
 		if (errorRouteData) {
 			if (errorRouteData.prerender) {
 				const maybeDotHtml = errorRouteData.route.endsWith(`/${status}`) ? '.html' : '';
 				const statusURL = new URL(
-					`${this.#baseWithoutTrailingSlash}/${status}${maybeDotHtml}`,
+					`${this.#baseWithoutTrailingSlash}${errorRouteData.route}${maybeDotHtml}`,
 					url,
 				);
 				if (statusURL.toString() !== request.url) {

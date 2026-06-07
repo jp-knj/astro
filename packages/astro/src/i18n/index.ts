@@ -6,6 +6,7 @@ import { i18nNoLocaleFoundInPath, MissingLocale } from '../core/errors/errors-da
 import { AstroError } from '../core/errors/index.js';
 import type { AstroConfig, Locales, ValidRedirectStatus } from '../types/public/config.js';
 import type { APIContext } from '../types/public/context.js';
+import type { RouteData } from '../types/public/internal.js';
 import { createI18nMiddleware } from './middleware.js';
 import type { RoutingStrategies } from './utils.js';
 
@@ -35,6 +36,26 @@ export function pathHasLocale(path: string, locales: Locales): boolean {
 	}
 
 	return false;
+}
+
+export function getErrorRoutePath(
+	pathname: string,
+	status: 404 | 500,
+	routes: RouteData[],
+	locales: Locales | undefined,
+	appendTrailingSlash = false,
+): string {
+	const suffix = appendTrailingSlash ? '/' : '';
+	if (locales) {
+		const firstSegment = pathname.split('/').find(Boolean);
+		if (firstSegment && pathHasLocale(`/${firstSegment}`, locales)) {
+			const localized = `/${firstSegment}/${status}`;
+			if (routes.some((route) => route.route === localized)) {
+				return `${localized}${suffix}`;
+			}
+		}
+	}
+	return `/${status}${suffix}`;
 }
 
 type GetLocaleRelativeUrl = GetLocaleOptions & {

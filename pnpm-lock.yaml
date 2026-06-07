@@ -3405,6 +3405,12 @@ importers:
         specifier: workspace:*
         version: link:../../..
 
+  packages/astro/test/fixtures/i18n-locale-404:
+    dependencies:
+      astro:
+        specifier: workspace:*
+        version: link:../../..
+
   packages/astro/test/fixtures/i18n-locale-index-format-file:
     dependencies:
       astro:

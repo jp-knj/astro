@@ -4,12 +4,48 @@ import { validateConfig } from '../../../dist/core/config/validate.js';
 import { MissingLocale } from '../../../dist/core/errors/errors-data.js';
 import { AstroError } from '../../../dist/core/errors/index.js';
 import {
+	getErrorRoutePath,
 	getLocaleAbsoluteUrl,
 	getLocaleAbsoluteUrlList,
 	getLocaleRelativeUrl,
 	getLocaleRelativeUrlList,
 } from '../../../dist/i18n/index.js';
 import { parseLocale, toRoutingStrategy } from '../../../dist/i18n/utils.js';
+
+describe('getErrorRoutePath', () => {
+	const routes = [{ route: '/404' }, { route: '/500' }, { route: '/pt/404' }, { route: '/it/500' }];
+	const locales = ['en', 'pt', 'it'];
+
+	it('prefers a matching localized 404 route', () => {
+		assert.equal(getErrorRoutePath('/pt/missing', 404, routes, locales), '/pt/404');
+	});
+
+	it('prefers a matching localized 500 route', () => {
+		assert.equal(getErrorRoutePath('/it/missing', 500, routes, locales), '/it/500');
+	});
+
+	it('falls back to the global error route when the localized route is not defined', () => {
+		assert.equal(getErrorRoutePath('/it/missing', 404, routes, locales), '/404');
+	});
+
+	it('falls back to the global error route when the request has no locale prefix', () => {
+		assert.equal(getErrorRoutePath('/missing', 404, routes, locales), '/404');
+	});
+
+	it('supports locale path objects', () => {
+		assert.equal(
+			getErrorRoutePath('/brasil/missing', 404, [{ route: '/brasil/404' }], [
+				'en',
+				{ path: 'brasil', codes: ['pt-BR'] },
+			]),
+			'/brasil/404',
+		);
+	});
+
+	it('can append a trailing slash', () => {
+		assert.equal(getErrorRoutePath('/pt/missing', 404, routes, locales, true), '/pt/404/');
+	});
+});
 
 describe('getLocaleRelativeUrl', () => {
 	it('should correctly return the URL with the base', () => {
