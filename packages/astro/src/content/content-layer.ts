@@ -26,7 +26,7 @@ import {
 	loaderReturnSchema,
 	safeStringify,
 } from './utils.js';
-import { createViteImageSourceResolver, withContentImageResolver } from './image.js';
+import { createViteImageSourceResolver } from './image.js';
 import { createWatcherWrapper, type WrappedWatcher } from './watcher.js';
 
 export interface ContentLayerOptions {
@@ -192,26 +192,6 @@ export class ContentLayer {
 	}
 
 	async #doSync(options: RefreshContentOptions) {
-		// Let `image()` resolve aliases and root-absolute sources the way read time does, for
-		// as long as this sync is running. Ambient rather than passed down because
-		// `content.config.ts` imports `astro/content/image` through Vite while this module is
-		// loaded by Node, so the two do not share module instances — threading it through the
-		// loader context instead would mean exposing it on the public `LoaderContext`.
-		//
-		// Reentrancy: `sync()` funnels every job through `#queue` (concurrency 1), so one
-		// `ContentLayer` never has two syncs in flight. Separate instances in the same process
-		// (parallel in-process tests, mainly) can still overlap; `withContentImageResolver`
-		// keeps that from leaving a resolver installed after its sync ends, but the slot holds
-		// a single resolver, so while two syncs overlap both see the one that started last.
-		if (!this.#viteServer) {
-			return await this.#doSyncInner(options);
-		}
-		return await withContentImageResolver(createViteImageSourceResolver(this.#viteServer), () =>
-			this.#doSyncInner(options),
-		);
-	}
-
-	async #doSyncInner(options: RefreshContentOptions) {
 		let contentConfig = this.#contentConfigObserver.get();
 		const logger = this.#logger.forkIntegrationLogger('content');
 
@@ -309,6 +289,13 @@ export class ContentLayer {
 		const backwardsCompatEnabled =
 			this.#settings.config.legacy?.collectionsBackwardsCompat ?? false;
 
+		// Lets `image()` resolve aliases and root-absolute sources the way read time does. Passed
+		// to each entry's schema context rather than installed globally, so overlapping syncs
+		// cannot see each other's resolver.
+		const imageResolver = this.#viteServer
+			? createViteImageSourceResolver(this.#viteServer)
+			: undefined;
+
 		await Promise.all(
 			Object.entries(contentConfig.config.collections).map(async ([name, collection]) => {
 				// Skip non-content_layer collections unless backwards compat is enabled
@@ -355,6 +342,8 @@ export class ContentLayer {
 							},
 							{ ...collection, schema },
 							false,
+							undefined,
+							imageResolver,
 						),
 					loaderName,
 					refreshContextData: options?.context,

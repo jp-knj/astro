@@ -31,7 +31,11 @@ import {
 	DEFERRED_MODULE,
 	LIVE_CONTENT_TYPE,
 } from './consts.js';
-import { image as resolveImageField } from './image.js';
+import {
+	CONTENT_IMAGE_RESOLVER,
+	type ImageSourceResolver,
+	image as resolveImageField,
+} from './image.js';
 import { glob, secretLegacyFlag } from './loaders/glob.js';
 import type { LoaderContext } from './loaders/types.js';
 import { createImage } from './runtime-assets.js';
@@ -178,6 +182,7 @@ export async function getEntryData<
 	collectionConfig: CollectionConfig,
 	shouldEmitFile: boolean,
 	pluginContext?: Rolldown.PluginContext,
+	imageResolver?: ImageSourceResolver,
 ): Promise<TOutputData> {
 	let data = entry.unvalidatedData as TOutputData;
 
@@ -191,13 +196,17 @@ export async function getEntryData<
 				image: createImage(pluginContext, shouldEmitFile, filePath),
 			});
 		} else if (collectionConfig.type === CONTENT_LAYER_TYPE) {
+			const imageContext = { filePath, [CONTENT_IMAGE_RESOLVER]: imageResolver };
 			schema = schema({
 				// The entry's file path, so `image(context, { src })` can resolve relative
 				// sources.
 				filePath,
+				// Not part of the public context type; read by `image()` to resolve aliases and
+				// root-absolute sources during sync.
+				[CONTENT_IMAGE_RESOLVER]: imageResolver,
 				// Deprecated `({ image })` form. Routed through the same resolver, so legacy
 				// schemas gain probing and validation too.
-				image: () => z.string().transform((val) => resolveImageField({ filePath }, { src: val })),
+				image: () => z.string().transform((val) => resolveImageField(imageContext, { src: val })),
 			});
 		}
 	}
